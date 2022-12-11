@@ -42,7 +42,7 @@ set(sdk_srcs
     "${sdk_src}/golioth_debug.c"
 )
 
-add_library(golioth_sdk
+add_library(golioth_sdk SHARED
     ${heatshrink_srcs}
     ${sdk_srcs}
 )

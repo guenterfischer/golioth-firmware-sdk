@@ -9,3 +9,4 @@ firebase-debug.log
 mtb_shared
 *.key
 *.pem
+__pycache__
