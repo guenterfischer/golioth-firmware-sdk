@@ -11,6 +11,7 @@
 #include "mbox.h"
 
 #include "coap_client_zephyr.h"
+#include "coap_request_list.h"
 #include "pathv.h"
 #include "zephyr_coap_req.h"
 #include "zephyr_coap_utils.h"

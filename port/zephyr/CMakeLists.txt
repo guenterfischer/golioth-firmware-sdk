@@ -37,6 +37,7 @@ zephyr_library_sources(
     ../../src/zephyr_coap_utils.c
     ../../src/coap_client.c
     ../../src/coap_client_zephyr.c
+    ../../src/coap_request_list.c
     ../../src/golioth_debug.c
     ../../src/event_group.c
     ../../src/fw_update.c

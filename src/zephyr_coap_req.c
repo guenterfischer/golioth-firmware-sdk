@@ -13,6 +13,8 @@ LOG_MODULE_DECLARE(golioth_coap_client);
 #include <zephyr/random/random.h>
 
 #include "coap_client.h"
+#include "coap_client_zephyr.h"
+#include "coap_request_list.h"
 #include "zephyr_coap_req.h"
 #include "zephyr_coap_utils.h"
 
@@ -21,13 +23,6 @@ static const int64_t COAP_OBSERVE_TS_DIFF_NEWER = 128 * (int64_t) MSEC_PER_SEC;
 #define RESEND_REPORT_TIMEFRAME_S 10
 
 #define COAP_RESPONSE_CODE_CLASS(code) ((code) >> 5)
-
-void golioth_coap_reqs_init(struct golioth_client *client)
-{
-    sys_dlist_init(&client->coap_reqs);
-    client->coap_reqs_connected = false;
-    k_mutex_init(&client->coap_reqs_lock);
-}
 
 static int golioth_coap_req_send(struct golioth_coap_req *req)
 {
@@ -50,7 +45,7 @@ static int __golioth_coap_req_submit(struct golioth_coap_req *req)
         return -ENETDOWN;
     }
 
-    sys_dlist_append(&client->coap_reqs, &req->node);
+    golioth_req_list_append(req);
 
     return 0;
 }
@@ -60,23 +55,29 @@ static int golioth_coap_req_submit(struct golioth_coap_req *req)
     struct golioth_client *client = req->client;
     int err;
 
-    k_mutex_lock(&client->coap_reqs_lock, K_FOREVER);
+    golioth_sys_mutex_lock(client->coap_reqs_lock, GOLIOTH_SYS_WAIT_FOREVER);
     err = __golioth_coap_req_submit(req);
-    k_mutex_unlock(&client->coap_reqs_lock);
+    golioth_sys_mutex_unlock(client->coap_reqs_lock);
 
     return err;
 }
 
-static void golioth_coap_req_cancel(struct golioth_coap_req *req)
-{
-    sys_dlist_remove(&req->node);
-}
-
-static void golioth_coap_req_cancel_and_free(struct golioth_coap_req *req)
+static void golioth_coap_req_cancel_and_free(struct golioth_coap_req *req, bool require_mutex)
 {
     LOG_DBG("cancel and free req %p data %p", (void *) req, (void *) req->request.data);
 
-    golioth_coap_req_cancel(req);
+    if (require_mutex)
+    {
+        golioth_sys_mutex_lock(req->client->coap_reqs_lock, GOLIOTH_SYS_WAIT_FOREVER);
+    }
+
+    golioth_req_list_remove(req);
+
+    if (require_mutex)
+    {
+        golioth_sys_mutex_unlock(req->client->coap_reqs_lock);
+    }
+
     free(req->request.data);
     free(req);
 }
@@ -266,7 +267,7 @@ cancel_and_free:
     }
     else
     {
-        golioth_coap_req_cancel_and_free(req);
+        golioth_coap_req_cancel_and_free(req, false);
     }
 
     return 0;
@@ -274,7 +275,6 @@ cancel_and_free:
 
 void golioth_coap_req_process_rx(struct golioth_client *client, const struct coap_packet *rx)
 {
-    struct golioth_coap_req *req;
     uint8_t rx_token[COAP_TOKEN_MAX_LEN];
     uint16_t rx_id;
     uint8_t rx_tkl;
@@ -282,9 +282,11 @@ void golioth_coap_req_process_rx(struct golioth_client *client, const struct coa
     rx_id = coap_header_get_id(rx);
     rx_tkl = coap_header_get_token(rx, rx_token);
 
-    k_mutex_lock(&client->coap_reqs_lock, K_FOREVER);
+    golioth_sys_mutex_lock(client->coap_reqs_lock, GOLIOTH_SYS_WAIT_FOREVER);
 
-    SYS_DLIST_FOR_EACH_CONTAINER(&client->coap_reqs, req, node)
+    struct golioth_coap_req *req = client->coap_reqs;
+
+    while(req)
     {
         uint16_t req_id = coap_header_get_id(&req->request);
         uint8_t req_token[COAP_TOKEN_MAX_LEN];
@@ -293,17 +295,20 @@ void golioth_coap_req_process_rx(struct golioth_client *client, const struct coa
 
         if (req_id == 0U && req_tkl == 0U)
         {
+            req = req->next;
             continue;
         }
 
         /* Piggybacked must match id when token is empty */
         if (req_id != rx_id && rx_tkl == 0U)
         {
+            req = req->next;
             continue;
         }
 
         if (rx_tkl > 0 && memcmp(req_token, rx_token, rx_tkl))
         {
+            req = req->next;
             continue;
         }
 
@@ -322,6 +327,7 @@ void golioth_coap_req_process_rx(struct golioth_client *client, const struct coa
             {
                 req->reply.seq = observe_seq;
                 req->reply.ts = uptime;
+
                 golioth_coap_req_reply_handler(req, rx);
             }
         }
@@ -329,7 +335,7 @@ void golioth_coap_req_process_rx(struct golioth_client *client, const struct coa
         break;
     }
 
-    k_mutex_unlock(&client->coap_reqs_lock);
+    golioth_sys_mutex_unlock(client->coap_reqs_lock);
 }
 
 /**
@@ -661,7 +667,7 @@ static int64_t golioth_coap_req_poll_prepare(struct golioth_coap_req *req, uint3
 
             (void) req->cb(&rsp);
 
-            golioth_coap_req_cancel_and_free(req);
+            golioth_coap_req_cancel_and_free(req, false);
 
             return INT64_MAX;
         }
@@ -684,6 +690,7 @@ static int64_t golioth_coap_req_poll_prepare(struct golioth_coap_req *req, uint3
         {
             LOG_ERR("Send error: %d", err);
         }
+        err = 0;
     }
 
     if (req->client->resend_report_count
@@ -701,19 +708,22 @@ static int64_t golioth_coap_req_poll_prepare(struct golioth_coap_req *req, uint3
 
 static int64_t __golioth_coap_reqs_poll_prepare(struct golioth_client *client, int64_t now)
 {
-    struct golioth_coap_req *req, *next;
+    struct golioth_coap_req *req = client->coap_reqs;
     int64_t min_timeout = INT64_MAX;
 
-    SYS_DLIST_FOR_EACH_CONTAINER_SAFE(&client->coap_reqs, req, next, node)
+    while(req)
     {
         if (req->is_observe && !req->is_pending)
         {
+            req = req->next;
             continue;
         }
 
         int64_t req_timeout = golioth_coap_req_poll_prepare(req, now);
 
         min_timeout = MIN(min_timeout, req_timeout);
+
+        req = req->next;
     }
 
     return min_timeout;
@@ -723,31 +733,41 @@ int64_t golioth_coap_reqs_poll_prepare(struct golioth_client *client, int64_t no
 {
     int64_t timeout;
 
-    k_mutex_lock(&client->coap_reqs_lock, K_FOREVER);
+    golioth_sys_mutex_lock(client->coap_reqs_lock, GOLIOTH_SYS_WAIT_FOREVER);
     timeout = __golioth_coap_reqs_poll_prepare(client, now);
-    k_mutex_unlock(&client->coap_reqs_lock);
+    golioth_sys_mutex_unlock(client->coap_reqs_lock);
 
     return timeout;
 }
 
-static void golioth_coap_reqs_cancel_all_with_reason(struct golioth_client *client,
+static void __golioth_coap_reqs_cancel_all_with_reason(struct golioth_client *client,
                                                      enum golioth_status reason)
 {
-    struct golioth_coap_req *req, *next;
+    struct golioth_coap_req *req = client->coap_reqs;
+    struct golioth_coap_req *next;
 
-    SYS_DLIST_FOR_EACH_CONTAINER_SAFE(&client->coap_reqs, req, next, node)
+    while(req)
     {
-        struct golioth_req_rsp rsp = {
-            .user_data = req->user_data,
-            .status = reason,
-        };
 
+        /* Store pointer to next (or NULL) */
+        next = req->next;
+
+        /* Call callbacks */
         if (!req->is_observe)
         {
+            struct golioth_req_rsp rsp = {
+                .user_data = req->user_data,
+                .status = reason,
+            };
+
             (void) req->cb(&rsp);
         }
 
-        golioth_coap_req_cancel_and_free(req);
+        /* Cancel the request and free memory */
+        golioth_coap_req_cancel_and_free(req, false);
+
+        /* Use stored pointer (or NULL) for next loop */
+        req = next;
     }
 }
 
@@ -755,9 +775,9 @@ static int __golioth_coap_req_find_and_cancel_observation(
     struct golioth_client *client,
     golioth_coap_request_msg_t *cancel_req_msg)
 {
-    struct golioth_coap_req *req, *next;
+    struct golioth_coap_req *req = client->coap_reqs;
 
-    SYS_DLIST_FOR_EACH_CONTAINER_SAFE(&client->coap_reqs, req, next, node)
+    while(req)
     {
         if ((req->user_data == cancel_req_msg) && (req->is_observe))
         {
@@ -796,9 +816,11 @@ static int __golioth_coap_req_find_and_cancel_observation(
             }
 
         remove_from_coap_reqs_and_free:
-            golioth_coap_req_cancel_and_free(req);
+            golioth_coap_req_cancel_and_free(req, false);
             return err;
         }
+
+        req = req->next;
     }
 
     return GOLIOTH_ERR_NO_MORE_DATA;
@@ -807,16 +829,16 @@ static int __golioth_coap_req_find_and_cancel_observation(
 int golioth_coap_req_find_and_cancel_observation(struct golioth_client *client,
                                                  golioth_coap_request_msg_t *cancel_req_msg)
 {
-    k_mutex_lock(&client->coap_reqs_lock, K_FOREVER);
+    golioth_sys_mutex_lock(client->coap_reqs_lock, GOLIOTH_SYS_WAIT_FOREVER);
     int err = __golioth_coap_req_find_and_cancel_observation(client, cancel_req_msg);
-    k_mutex_unlock(&client->coap_reqs_lock);
+    golioth_sys_mutex_unlock(client->coap_reqs_lock);
 
     return err;
 }
 
 void golioth_coap_reqs_on_connect(struct golioth_client *client)
 {
-    k_mutex_lock(&client->coap_reqs_lock, K_FOREVER);
+    golioth_sys_mutex_lock(client->coap_reqs_lock, GOLIOTH_SYS_WAIT_FOREVER);
 
     /*
      * client->sock is protected by client->lock, so submitting new coap_req
@@ -828,15 +850,15 @@ void golioth_coap_reqs_on_connect(struct golioth_client *client)
      */
     client->coap_reqs_connected = true;
 
-    k_mutex_unlock(&client->coap_reqs_lock);
+    golioth_sys_mutex_unlock(client->coap_reqs_lock);
 }
 
 void golioth_coap_reqs_on_disconnect(struct golioth_client *client)
 {
-    k_mutex_lock(&client->coap_reqs_lock, K_FOREVER);
+    golioth_sys_mutex_lock(client->coap_reqs_lock, GOLIOTH_SYS_WAIT_FOREVER);
 
     client->coap_reqs_connected = false;
-    golioth_coap_reqs_cancel_all_with_reason(client, GOLIOTH_ERR_FAIL);
+    __golioth_coap_reqs_cancel_all_with_reason(client, GOLIOTH_ERR_FAIL);
 
-    k_mutex_unlock(&client->coap_reqs_lock);
+    golioth_sys_mutex_unlock(client->coap_reqs_lock);
 }

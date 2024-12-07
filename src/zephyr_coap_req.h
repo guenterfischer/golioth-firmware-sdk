@@ -9,6 +9,7 @@
 
 #include "coap_client.h"
 #include "coap_client_zephyr.h"
+#include <zephyr/net/coap.h>
 
 /**
  *  @defgroup golioth_coap_req_flags CoAP request flags
@@ -50,7 +51,9 @@ struct golioth_coap_reply
  */
 struct golioth_coap_req
 {
-    sys_dnode_t node;
+    struct golioth_coap_req *prev;
+    struct golioth_coap_req *next;
+
     struct coap_packet request;
     // TODO: Can we use request_wo_block_option for both request_wo_block1 and 2?
     struct coap_packet request_wo_block1;
@@ -68,15 +71,6 @@ struct golioth_coap_req
     golioth_req_cb_t cb;
     void *user_data;
 };
-
-/**
- * @brief Initialize CoAP requests for client
- *
- * Initializes CoAP requests handling for Golioth client instance.
- *
- * @param[inout] client Client instance
- */
-void golioth_coap_reqs_init(struct golioth_client *client);
 
 /**
  * @brief Allocate and initialize new CoAP request

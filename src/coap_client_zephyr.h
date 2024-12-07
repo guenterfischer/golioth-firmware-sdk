@@ -88,9 +88,9 @@ struct golioth_client
     struct coap_packet rx_packet;
     int sock;
 
-    sys_dlist_t coap_reqs;
+    struct golioth_coap_req *coap_reqs;
     bool coap_reqs_connected;
-    struct k_mutex coap_reqs_lock;
+    golioth_sys_mutex_t coap_reqs_lock;
 
     uint16_t resend_report_count;
     uint32_t resend_report_last_ms;
