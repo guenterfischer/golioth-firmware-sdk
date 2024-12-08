@@ -24,7 +24,8 @@ void golioth_coap_reqs_init(struct golioth_client *client)
     client->coap_reqs_lock = golioth_sys_mutex_create();
 }
 
-void golioth_req_list_append(struct golioth_coap_req *req)
+// Function must not be run unless first guarded by golioth_client->coap_reqs_lock
+static void req_list_append_unsafe(struct golioth_coap_req *req)
 {
     if (!req)
     {
@@ -71,4 +72,18 @@ void golioth_req_list_remove(struct golioth_coap_req *req)
     {
         req->next->prev = req->prev;
     }
+}
+
+int golioth_coap_req_submit(struct golioth_coap_req *req)
+{
+    golioth_sys_mutex_lock(req->client->coap_reqs_lock, GOLIOTH_SYS_WAIT_FOREVER);
+    if (!req->client->coap_reqs_connected)
+    {
+        return -ENETDOWN;
+    }
+
+    req_list_append_unsafe(req);
+    golioth_sys_mutex_unlock(req->client->coap_reqs_lock);
+
+    return GOLIOTH_OK;
 }

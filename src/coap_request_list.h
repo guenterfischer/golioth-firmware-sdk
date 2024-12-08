@@ -26,11 +26,13 @@ extern "C"
 void golioth_coap_reqs_init(struct golioth_client *client);
 
 /**
- * @brief Add request the stored requests list
+ * @brief Add request to the stored requests list
+ *
+ * Requests will only be added if the client is currently connected.
  *
  * @param[inout] req Coap request to be added
  */
-void golioth_req_list_append(struct golioth_coap_req *req);
+int golioth_coap_req_submit(struct golioth_coap_req *req);
 
 /**
  * @brief Remove request from the store requests list

@@ -36,32 +36,6 @@ static void golioth_coap_pending_init(struct golioth_coap_pending *pending, uint
     pending->retries = retries;
 }
 
-static int __golioth_coap_req_submit(struct golioth_coap_req *req)
-{
-    struct golioth_client *client = req->client;
-
-    if (!client->coap_reqs_connected)
-    {
-        return -ENETDOWN;
-    }
-
-    golioth_req_list_append(req);
-
-    return 0;
-}
-
-static int golioth_coap_req_submit(struct golioth_coap_req *req)
-{
-    struct golioth_client *client = req->client;
-    int err;
-
-    golioth_sys_mutex_lock(client->coap_reqs_lock, GOLIOTH_SYS_WAIT_FOREVER);
-    err = __golioth_coap_req_submit(req);
-    golioth_sys_mutex_unlock(client->coap_reqs_lock);
-
-    return err;
-}
-
 static void golioth_coap_req_cancel_and_free(struct golioth_coap_req *req, bool require_mutex)
 {
     LOG_DBG("cancel and free req %p data %p", (void *) req, (void *) req->request.data);
