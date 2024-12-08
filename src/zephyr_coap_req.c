@@ -20,41 +20,7 @@ LOG_MODULE_DECLARE(golioth_coap_client);
 
 static const int64_t COAP_OBSERVE_TS_DIFF_NEWER = 128 * (int64_t) MSEC_PER_SEC;
 
-#define RESEND_REPORT_TIMEFRAME_S 10
-
 #define COAP_RESPONSE_CODE_CLASS(code) ((code) >> 5)
-
-static int golioth_coap_req_send(struct golioth_coap_req *req)
-{
-    return golioth_send_coap(req->client, &req->request);
-}
-
-static void golioth_coap_pending_init(struct golioth_coap_pending *pending, uint8_t retries)
-{
-    pending->t0 = k_uptime_get_32();
-    pending->timeout = 0;
-    pending->retries = retries;
-}
-
-static void golioth_coap_req_cancel_and_free(struct golioth_coap_req *req, bool require_mutex)
-{
-    LOG_DBG("cancel and free req %p data %p", (void *) req, (void *) req->request.data);
-
-    if (require_mutex)
-    {
-        golioth_sys_mutex_lock(req->client->coap_reqs_lock, GOLIOTH_SYS_WAIT_FOREVER);
-    }
-
-    golioth_req_list_remove(req);
-
-    if (require_mutex)
-    {
-        golioth_sys_mutex_unlock(req->client->coap_reqs_lock);
-    }
-
-    free(req->request.data);
-    free(req);
-}
 
 /* Reordering according to RFC7641 section 3.4 */
 static inline bool sequence_number_is_newer(int v1, int v2)
@@ -574,7 +540,7 @@ free_req:
     return err;
 }
 
-static uint32_t init_ack_timeout(void)
+uint32_t init_ack_timeout(void)
 {
 #if defined(CONFIG_COAP_RANDOMIZE_ACK_TIMEOUT)
     const uint32_t max_ack = CONFIG_COAP_INIT_ACK_TIMEOUT_MS * CONFIG_COAP_ACK_RANDOM_PERCENT / 100;
@@ -590,222 +556,39 @@ static uint32_t init_ack_timeout(void)
 #endif /* defined(CONFIG_COAP_RANDOMIZE_ACK_TIMEOUT) */
 }
 
-static bool golioth_coap_pending_cycle(struct golioth_coap_pending *pending)
+int golioth_coap_req_cancel_observation(struct golioth_coap_req *req)
 {
-    if (pending->timeout == 0)
-    {
-        /* Initial transmission. */
-        pending->timeout = init_ack_timeout();
-
-        return true;
-    }
-
-    if (pending->retries == 0)
-    {
-        return false;
-    }
-
-    pending->t0 += pending->timeout;
-    pending->timeout = pending->timeout << 1;
-    pending->retries--;
-
-    return true;
-}
-
-static int64_t golioth_coap_req_poll_prepare(struct golioth_coap_req *req, uint32_t now)
-{
-    int64_t timeout;
-    bool send = false;
-    bool resend = (req->pending.timeout != 0);
     int err;
+    uint8_t coap_token[COAP_TOKEN_MAX_LEN];
+    size_t coap_token_len = coap_header_get_token(&req->request, coap_token);
+    int coap_content_format = coap_get_option_int(&req->request, COAP_OPTION_ACCEPT);
 
-    while (true)
+    if (coap_token_len == 0)
     {
-        timeout = (int32_t) (req->pending.t0 + req->pending.timeout) - (int32_t) now;
-
-        if (timeout > 0)
-        {
-            /* Return timeout when packet still waits for response/ack */
-            break;
-        }
-
-        send = golioth_coap_pending_cycle(&req->pending);
-        if (!send)
-        {
-            struct golioth_req_rsp rsp = {
-                .user_data = req->user_data,
-                .status = GOLIOTH_ERR_TIMEOUT,
-            };
-
-            LOG_WRN("Packet %p (reply %p) was not replied to", (void *) req, (void *) &req->reply);
-
-            (void) req->cb(&rsp);
-
-            golioth_coap_req_cancel_and_free(req, false);
-
-            return INT64_MAX;
-        }
+        LOG_ERR("Unable to get coap token from request. Got length: %d", coap_token_len);
+        return GOLIOTH_ERR_NO_MORE_DATA;
     }
 
-    if (send)
+    if (coap_content_format < 0)
     {
-        if (resend)
-        {
-            LOG_DBG("Resending request %p (reply %p) (retries %d)",
-                    (void *) req,
-                    (void *) &req->reply,
-                    (int) req->pending.retries);
-
-            req->client->resend_report_count++;
-        }
-
-        err = golioth_coap_req_send(req);
-        if (err)
-        {
-            LOG_ERR("Send error: %d", err);
-        }
-        err = 0;
+        LOG_ERR("Unable to get coap content format from request: %d", coap_content_format);
+        return GOLIOTH_ERR_INVALID_FORMAT;
     }
 
-    if (req->client->resend_report_count
-        && ((now - req->client->resend_report_last_ms) >= (RESEND_REPORT_TIMEFRAME_S * 1000)))
+    golioth_coap_request_msg_t *req_msg = req->user_data;
+
+    /* Enqueue an "eager release" request for this observation */
+    err = golioth_coap_client_observe_release(req->client,
+                                              req_msg->path_prefix,
+                                              req_msg->path,
+                                              coap_content_format,
+                                              coap_token,
+                                              coap_token_len,
+                                              NULL);
+    if (err)
     {
-        LOG_WRN("%u resends in last %d seconds",
-                req->client->resend_report_count,
-                RESEND_REPORT_TIMEFRAME_S);
-        req->client->resend_report_last_ms = now;
-        req->client->resend_report_count = 0;
+        LOG_ERR("Error encoding observe release request: %d", err);
     }
-
-    return timeout;
-}
-
-static int64_t __golioth_coap_reqs_poll_prepare(struct golioth_client *client, int64_t now)
-{
-    struct golioth_coap_req *req = client->coap_reqs;
-    int64_t min_timeout = INT64_MAX;
-
-    while(req)
-    {
-        if (req->is_observe && !req->is_pending)
-        {
-            req = req->next;
-            continue;
-        }
-
-        int64_t req_timeout = golioth_coap_req_poll_prepare(req, now);
-
-        min_timeout = MIN(min_timeout, req_timeout);
-
-        req = req->next;
-    }
-
-    return min_timeout;
-}
-
-int64_t golioth_coap_reqs_poll_prepare(struct golioth_client *client, int64_t now)
-{
-    int64_t timeout;
-
-    golioth_sys_mutex_lock(client->coap_reqs_lock, GOLIOTH_SYS_WAIT_FOREVER);
-    timeout = __golioth_coap_reqs_poll_prepare(client, now);
-    golioth_sys_mutex_unlock(client->coap_reqs_lock);
-
-    return timeout;
-}
-
-static void __golioth_coap_reqs_cancel_all_with_reason(struct golioth_client *client,
-                                                     enum golioth_status reason)
-{
-    struct golioth_coap_req *req = client->coap_reqs;
-    struct golioth_coap_req *next;
-
-    while(req)
-    {
-
-        /* Store pointer to next (or NULL) */
-        next = req->next;
-
-        /* Call callbacks */
-        if (!req->is_observe)
-        {
-            struct golioth_req_rsp rsp = {
-                .user_data = req->user_data,
-                .status = reason,
-            };
-
-            (void) req->cb(&rsp);
-        }
-
-        /* Cancel the request and free memory */
-        golioth_coap_req_cancel_and_free(req, false);
-
-        /* Use stored pointer (or NULL) for next loop */
-        req = next;
-    }
-}
-
-static int __golioth_coap_req_find_and_cancel_observation(
-    struct golioth_client *client,
-    golioth_coap_request_msg_t *cancel_req_msg)
-{
-    struct golioth_coap_req *req = client->coap_reqs;
-
-    while(req)
-    {
-        if ((req->user_data == cancel_req_msg) && (req->is_observe))
-        {
-            int err;
-            uint8_t coap_token[COAP_TOKEN_MAX_LEN];
-            size_t coap_token_len = coap_header_get_token(&req->request, coap_token);
-            int coap_content_format = coap_get_option_int(&req->request, COAP_OPTION_ACCEPT);
-
-            if (coap_token_len == 0)
-            {
-                LOG_ERR("Unable to get coap token from request. Got length: %d", coap_token_len);
-                err = GOLIOTH_ERR_NO_MORE_DATA;
-                goto remove_from_coap_reqs_and_free;
-            }
-
-            if (coap_content_format < 0)
-            {
-                LOG_ERR("Unable to get coap content format from request: %d", coap_content_format);
-                err = GOLIOTH_ERR_INVALID_FORMAT;
-                goto remove_from_coap_reqs_and_free;
-            }
-
-            golioth_coap_request_msg_t *req_msg = req->user_data;
-
-            /* Enqueue an "eager release" request for this observation */
-            err = golioth_coap_client_observe_release(client,
-                                                      req_msg->path_prefix,
-                                                      req_msg->path,
-                                                      coap_content_format,
-                                                      coap_token,
-                                                      coap_token_len,
-                                                      NULL);
-            if (err)
-            {
-                LOG_ERR("Error encoding observe release request: %d", err);
-            }
-
-        remove_from_coap_reqs_and_free:
-            golioth_coap_req_cancel_and_free(req, false);
-            return err;
-        }
-
-        req = req->next;
-    }
-
-    return GOLIOTH_ERR_NO_MORE_DATA;
-}
-
-int golioth_coap_req_find_and_cancel_observation(struct golioth_client *client,
-                                                 golioth_coap_request_msg_t *cancel_req_msg)
-{
-    golioth_sys_mutex_lock(client->coap_reqs_lock, GOLIOTH_SYS_WAIT_FOREVER);
-    int err = __golioth_coap_req_find_and_cancel_observation(client, cancel_req_msg);
-    golioth_sys_mutex_unlock(client->coap_reqs_lock);
 
     return err;
 }
@@ -817,10 +600,6 @@ void golioth_coap_reqs_on_connect(struct golioth_client *client)
 
 void golioth_coap_reqs_on_disconnect(struct golioth_client *client)
 {
-    golioth_sys_mutex_lock(client->coap_reqs_lock, GOLIOTH_SYS_WAIT_FOREVER);
-
-    client->coap_reqs_connected = false;
-    __golioth_coap_reqs_cancel_all_with_reason(client, GOLIOTH_ERR_FAIL);
-
-    golioth_sys_mutex_unlock(client->coap_reqs_lock);
+    golioth_coap_reqs_connected_set(client, false);
+    golioth_coap_reqs_cancel_all_with_reason(client, GOLIOTH_ERR_FAIL);
 }

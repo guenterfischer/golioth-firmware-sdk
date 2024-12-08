@@ -25,6 +25,8 @@ extern "C"
  */
 void golioth_coap_reqs_init(struct golioth_client *client);
 
+void golioth_coap_pending_init(struct golioth_coap_pending *pending, uint8_t retries);
+
 /**
  * @brief Add request to the stored requests list
  *
@@ -56,6 +58,23 @@ void golioth_req_list_remove(struct golioth_coap_req *req);
  */
 void golioth_coap_reqs_connected_set(struct golioth_client *client, bool is_connected);
 
+void golioth_coap_reqs_cancel_all_with_reason(struct golioth_client *client,
+                                                     enum golioth_status reason);
+
+/**
+ * @brief Find a stored CoAP observation request and cancel it
+ *
+ * Search the client coap_reqs array for a request that has a user_data pointer that matches the
+ * provided goloth_coap_request_msg_t pointer. Call golioth_coap_req_cancel_observation() to inform the server. Remove the request from the client coap_reqs list and free the memory.
+ *
+ * @param[in] client Client instance
+ * @param[in] cancel_req_msg pointer to request message used to match with CoAP request
+ *
+ * @retval 0 On success
+ * @retval <0 On failure
+ */
+int golioth_coap_req_find_and_cancel_observation(struct golioth_client *client,
+                                                 golioth_coap_request_msg_t *cancel_req_msg);
 #ifdef __cplusplus
 }
 #endif
