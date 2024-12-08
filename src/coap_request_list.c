@@ -74,6 +74,11 @@ void golioth_req_list_remove(struct golioth_coap_req *req)
     }
 }
 
+static void golioth_reqs_connected_set_unsafe(struct golioth_client *client, bool is_connected)
+{
+    client->coap_reqs_connected = is_connected;
+}
+
 int golioth_coap_req_submit(struct golioth_coap_req *req)
 {
     golioth_sys_mutex_lock(req->client->coap_reqs_lock, GOLIOTH_SYS_WAIT_FOREVER);
@@ -86,4 +91,11 @@ int golioth_coap_req_submit(struct golioth_coap_req *req)
     golioth_sys_mutex_unlock(req->client->coap_reqs_lock);
 
     return GOLIOTH_OK;
+}
+
+void golioth_coap_reqs_connected_set(struct golioth_client *client, bool is_connected)
+{
+    golioth_sys_mutex_lock(client->coap_reqs_lock, GOLIOTH_SYS_WAIT_FOREVER);
+    golioth_reqs_connected_set_unsafe(client, is_connected);
+    golioth_sys_mutex_unlock(client->coap_reqs_lock);
 }

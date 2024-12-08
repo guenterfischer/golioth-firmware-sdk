@@ -41,6 +41,21 @@ int golioth_coap_req_submit(struct golioth_coap_req *req);
  */
 void golioth_req_list_remove(struct golioth_coap_req *req);
 
+/**
+ * @brief Store connection state specifically for use with coap_reqs list
+ *
+ * client->sock is protected by client->lock, so submitting new coap_req
+ * requests would potentially block on other thread currently receiving
+ * or sending data using golioth_{recv,send} APIs.
+ *
+ * Hence use another client->coap_reqs_connected to save information
+ * whether we are connected or not.
+ *
+ * @param[inout] client Client instance
+ * @param[in] is_connected Connection state to store
+ */
+void golioth_coap_reqs_connected_set(struct golioth_client *client, bool is_connected);
+
 #ifdef __cplusplus
 }
 #endif

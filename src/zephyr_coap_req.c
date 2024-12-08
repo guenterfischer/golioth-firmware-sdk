@@ -812,19 +812,7 @@ int golioth_coap_req_find_and_cancel_observation(struct golioth_client *client,
 
 void golioth_coap_reqs_on_connect(struct golioth_client *client)
 {
-    golioth_sys_mutex_lock(client->coap_reqs_lock, GOLIOTH_SYS_WAIT_FOREVER);
-
-    /*
-     * client->sock is protected by client->lock, so submitting new coap_req
-     * requests would potentially block on other thread currently receiving
-     * or sending data using golioth_{recv,send} APIs.
-     *
-     * Hence use another client->coap_reqs_connected to save information
-     * whether we are connected or not.
-     */
-    client->coap_reqs_connected = true;
-
-    golioth_sys_mutex_unlock(client->coap_reqs_lock);
+    golioth_coap_reqs_connected_set(client, true);
 }
 
 void golioth_coap_reqs_on_disconnect(struct golioth_client *client)
