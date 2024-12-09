@@ -75,6 +75,15 @@ void golioth_coap_reqs_cancel_all_with_reason(struct golioth_client *client,
  */
 int golioth_coap_req_find_and_cancel_observation(struct golioth_client *client,
                                                  golioth_coap_request_msg_t *cancel_req_msg);
+
+void golioth_request_list_process_response(struct golioth_client *client,
+                                           const struct coap_packet *response,
+                                           uint16_t rx_id,
+                                           uint8_t rx_token[COAP_TOKEN_MAX_LEN],
+                                           uint8_t rx_tkl,
+                                           int observe_seq);
+
 #ifdef __cplusplus
 }
 #endif
+

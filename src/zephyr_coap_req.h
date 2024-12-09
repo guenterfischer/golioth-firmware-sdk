@@ -21,6 +21,8 @@
 /** CoAP request does not expect response with payload */
 #define GOLIOTH_COAP_REQ_NO_RESP_BODY BIT(1)
 
+extern const int64_t COAP_OBSERVE_TS_DIFF_NEWER;
+
 /** @} */
 
 /**
@@ -132,35 +134,35 @@ int golioth_coap_req_schedule(struct golioth_coap_req *req);
  */
 int golioth_coap_req_cancel_observation(struct golioth_coap_req *req);
 
-    /**
-     * @brief Create and schedule CoAP request for sending
-     *
-     * This is a combination of golioth_coap_req_new() and golioth_coap_req_schedule() with most
-     * common CoAP options (controlled/selected by @p flags) and request body appended to allocated
-     * CoAP packet.
-     *
-     * @param[in] client Client instance
-     * @param[in] method CoAP request method
-     * @param[in] pathv Array of CoAP path components
-     * @param[in] format Content type
-     * @param[in] data CoAP request payload (NULL if no payload should be appended)
-     * @param[in] data_len Length of CoAP request payload
-     * @param[in] cb Callback executed on response received, timeout or error. Can be NULL.
-     * @param[in] user_data User data passed to @p cb
-     * @param[in] flags Flags (@sa golioth_coap_req_flags)
-     *
-     * @retval 0 On success
-     * @retval <0 On failure
-     */
-    int golioth_coap_req_cb(struct golioth_client *client,
-                            enum coap_method method,
-                            const uint8_t **pathv,
-                            enum coap_content_format format,
-                            const uint8_t *data,
-                            size_t data_len,
-                            golioth_req_cb_t cb,
-                            void *user_data,
-                            int flags);
+/**
+ * @brief Create and schedule CoAP request for sending
+ *
+ * This is a combination of golioth_coap_req_new() and golioth_coap_req_schedule() with most
+ * common CoAP options (controlled/selected by @p flags) and request body appended to allocated
+ * CoAP packet.
+ *
+ * @param[in] client Client instance
+ * @param[in] method CoAP request method
+ * @param[in] pathv Array of CoAP path components
+ * @param[in] format Content type
+ * @param[in] data CoAP request payload (NULL if no payload should be appended)
+ * @param[in] data_len Length of CoAP request payload
+ * @param[in] cb Callback executed on response received, timeout or error. Can be NULL.
+ * @param[in] user_data User data passed to @p cb
+ * @param[in] flags Flags (@sa golioth_coap_req_flags)
+ *
+ * @retval 0 On success
+ * @retval <0 On failure
+ */
+int golioth_coap_req_cb(struct golioth_client *client,
+                        enum coap_method method,
+                        const uint8_t **pathv,
+                        enum coap_content_format format,
+                        const uint8_t *data,
+                        size_t data_len,
+                        golioth_req_cb_t cb,
+                        void *user_data,
+                        int flags);
 
 /**
  * @brief Schedule CoAP request and synchronously wait for response
@@ -234,3 +236,8 @@ void golioth_coap_reqs_on_connect(struct golioth_client *client);
  * @param[in] client Client instance
  */
 void golioth_coap_reqs_on_disconnect(struct golioth_client *client);
+
+enum golioth_status golioth_coap_req_reply_handler(struct golioth_coap_req *req,
+                                                   const struct coap_packet *response,
+                                                   struct golioth_req_rsp *rsp,
+                                                   bool *run_callback_and_remove);

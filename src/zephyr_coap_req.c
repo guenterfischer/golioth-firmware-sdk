@@ -18,24 +18,14 @@ LOG_MODULE_DECLARE(golioth_coap_client);
 #include "zephyr_coap_req.h"
 #include "zephyr_coap_utils.h"
 
-static const int64_t COAP_OBSERVE_TS_DIFF_NEWER = 128 * (int64_t) MSEC_PER_SEC;
+const int64_t COAP_OBSERVE_TS_DIFF_NEWER = 128 * (int64_t) MSEC_PER_SEC;
 
 #define COAP_RESPONSE_CODE_CLASS(code) ((code) >> 5)
 
-/* Reordering according to RFC7641 section 3.4 */
-static inline bool sequence_number_is_newer(int v1, int v2)
-{
-    return (v1 < v2 && v2 - v1 < (1 << 23)) || (v1 > v2 && v1 - v2 > (1 << 23));
-}
-
-static bool golioth_coap_reply_is_newer(struct golioth_coap_reply *reply, int seq, int64_t uptime)
-{
-    return (uptime > reply->ts + COAP_OBSERVE_TS_DIFF_NEWER
-            || sequence_number_is_newer(reply->seq, seq));
-}
-
-static int golioth_coap_req_reply_handler(struct golioth_coap_req *req,
-                                          const struct coap_packet *response)
+enum golioth_status golioth_coap_req_reply_handler(struct golioth_coap_req *req,
+                                                   const struct coap_packet *response,
+                                                   struct golioth_req_rsp *rsp,
+                                                   bool *run_callback_and_remove)
 {
     uint16_t payload_len;
     uint8_t code;
@@ -45,15 +35,14 @@ static int golioth_coap_req_reply_handler(struct golioth_coap_req *req,
 
     code = coap_header_get_code(response);
 
-    struct golioth_req_rsp rsp = {
-        .coap_rsp_code.code_class = (uint8_t) (code >> 5),
-        .coap_rsp_code.code_detail = (uint8_t) (code & 0x1f),
-    };
+    rsp->coap_rsp_code.code_class = (uint8_t) (code >> 5);
+    rsp->coap_rsp_code.code_detail = (uint8_t) (code & 0x1f);
+    *run_callback_and_remove = true;
 
     LOG_DBG("CoAP response code: 0x%x (class %u detail %u)",
             (unsigned int) code,
-            rsp.coap_rsp_code.code_class,
-            rsp.coap_rsp_code.code_detail);
+            rsp->coap_rsp_code.code_class,
+            rsp->coap_rsp_code.code_detail);
 
     if (code == COAP_RESPONSE_CODE_BAD_REQUEST)
     {
@@ -61,20 +50,19 @@ static int golioth_coap_req_reply_handler(struct golioth_coap_req *req,
     }
 
     /* Check for 2.xx style CoAP response success code */
-    if (rsp.coap_rsp_code.code_class != 2)
+    if (rsp->coap_rsp_code.code_class != 2)
     {
-        rsp.user_data = req->user_data;
-        rsp.status = GOLIOTH_ERR_COAP_RESPONSE;
-
-        (void) req->cb(&rsp);
+        rsp->user_data = req->user_data;
+        rsp->status = GOLIOTH_ERR_COAP_RESPONSE;
 
         LOG_DBG("cancel and free req: %p", (void *) req);
 
+        err = rsp->status;
         goto cancel_and_free;
     }
     else
     {
-        rsp.status = GOLIOTH_OK;
+        rsp->status = GOLIOTH_OK;
     }
 
     payload = coap_packet_get_payload(response, &payload_len);
@@ -89,14 +77,12 @@ static int golioth_coap_req_reply_handler(struct golioth_coap_req *req,
         err = coap_update_from_block(response, &req->block_ctx);
         if (err)
         {
-            rsp.user_data = req->user_data;
-            rsp.status = GOLIOTH_ERR_FAIL;
+            rsp->user_data = req->user_data;
+            rsp->status = GOLIOTH_ERR_INVALID_FORMAT;
 
             LOG_ERR("Failed to parse get response: %d", err);
 
-            (void) req->cb(&rsp);
-
-            err = -EBADMSG;
+            err = rsp->status;
             goto cancel_and_free;
         }
 
@@ -107,59 +93,53 @@ static int golioth_coap_req_reply_handler(struct golioth_coap_req *req,
 
             req->block_ctx.current = want_offset;
 
-            return 0;
+            *run_callback_and_remove = false;
+
+            err = GOLIOTH_OK;
+            goto cancel_and_free;
         }
 
         new_offset = coap_next_block_for_option(response, &req->block_ctx, COAP_OPTION_BLOCK2);
         if (new_offset < 0)
         {
-            rsp.user_data = req->user_data;
-            rsp.status = GOLIOTH_ERR_FAIL;
+            rsp->user_data = req->user_data;
+            rsp->status = GOLIOTH_ERR_FAIL;
 
             LOG_ERR("Failed to move to next block: %zu", new_offset);
 
-            (void) req->cb(&rsp);
-
-            err = -EBADMSG;
+            err = rsp->status;
             goto cancel_and_free;
         }
         else if (new_offset == 0)
         {
-            rsp.data = payload;
-            rsp.len = payload_len;
-            rsp.off = cur_offset;
-            rsp.total = req->block_ctx.total_size;
-            rsp.is_last = true;
-            rsp.user_data = req->user_data;
+            rsp->data = payload;
+            rsp->len = payload_len;
+            rsp->off = cur_offset;
+            rsp->total = req->block_ctx.total_size;
+            rsp->is_last = true;
+            rsp->user_data = req->user_data;
 
             LOG_DBG("Blockwise transfer is finished!");
 
-            (void) req->cb(&rsp);
-
+            err = GOLIOTH_OK;
             goto cancel_and_free;
         }
         else
         {
-            rsp.data = payload;
-            rsp.len = payload_len;
-            rsp.off = cur_offset;
-            rsp.total = req->block_ctx.total_size;
-            rsp.is_last = false;
-            rsp.user_data = req->user_data;
-            rsp.status = req->is_observe ? GOLIOTH_ERR_FAIL : GOLIOTH_OK;
-
-            err = req->cb(&rsp);
-            if (err)
-            {
-                goto cancel_and_free;
-            }
+            rsp->data = payload;
+            rsp->len = payload_len;
+            rsp->off = cur_offset;
+            rsp->total = req->block_ctx.total_size;
+            rsp->is_last = false;
+            rsp->user_data = req->user_data;
+            rsp->status = req->is_observe ? GOLIOTH_ERR_NOT_IMPLEMENTED : GOLIOTH_OK;
 
             if (req->is_observe)
             {
                 LOG_ERR("TODO: blockwise observe is not supported");
-                err = -ENOTSUP;
             }
 
+            err = rsp->status;
             goto cancel_and_free;
         }
     }
@@ -184,19 +164,17 @@ static int golioth_coap_req_reply_handler(struct golioth_coap_req *req,
             }
         }
 
-        rsp.data = payload;
-        rsp.len = payload_len;
-        rsp.off = 0;
+        rsp->data = payload;
+        rsp->len = payload_len;
+        rsp->off = 0;
 
         /* Is it the same as 'req->block_ctx.total_size' ? */
-        rsp.total = payload_len;
+        rsp->total = payload_len;
 
-        rsp.is_last = true;
+        rsp->is_last = true;
+        rsp->user_data = req->user_data;
 
-        rsp.user_data = req->user_data;
-
-        (void) req->cb(&rsp);
-
+        err = GOLIOTH_OK;
         goto cancel_and_free;
     }
 
@@ -204,13 +182,11 @@ cancel_and_free:
     if (req->is_observe && !err)
     {
         req->is_pending = false;
-    }
-    else
-    {
-        golioth_coap_req_cancel_and_free(req, false);
+        run_callback_and_remove = false;
+        return GOLIOTH_OK;
     }
 
-    return 0;
+    return err;
 }
 
 void golioth_coap_req_process_rx(struct golioth_client *client, const struct coap_packet *rx)
@@ -218,64 +194,13 @@ void golioth_coap_req_process_rx(struct golioth_client *client, const struct coa
     uint8_t rx_token[COAP_TOKEN_MAX_LEN];
     uint16_t rx_id;
     uint8_t rx_tkl;
+    int observe_seq;
 
     rx_id = coap_header_get_id(rx);
     rx_tkl = coap_header_get_token(rx, rx_token);
+    observe_seq = coap_get_option_int(rx, COAP_OPTION_OBSERVE);
 
-    golioth_sys_mutex_lock(client->coap_reqs_lock, GOLIOTH_SYS_WAIT_FOREVER);
-
-    struct golioth_coap_req *req = client->coap_reqs;
-
-    while(req)
-    {
-        uint16_t req_id = coap_header_get_id(&req->request);
-        uint8_t req_token[COAP_TOKEN_MAX_LEN];
-        uint8_t req_tkl = coap_header_get_token(&req->request, req_token);
-        int observe_seq;
-
-        if (req_id == 0U && req_tkl == 0U)
-        {
-            req = req->next;
-            continue;
-        }
-
-        /* Piggybacked must match id when token is empty */
-        if (req_id != rx_id && rx_tkl == 0U)
-        {
-            req = req->next;
-            continue;
-        }
-
-        if (rx_tkl > 0 && memcmp(req_token, rx_token, rx_tkl))
-        {
-            req = req->next;
-            continue;
-        }
-
-        observe_seq = coap_get_option_int(rx, COAP_OPTION_OBSERVE);
-
-        if (observe_seq == -ENOENT)
-        {
-            golioth_coap_req_reply_handler(req, rx);
-        }
-        else
-        {
-            int64_t uptime = k_uptime_get();
-
-            /* handle observed requests only if received in order */
-            if (golioth_coap_reply_is_newer(&req->reply, observe_seq, uptime))
-            {
-                req->reply.seq = observe_seq;
-                req->reply.ts = uptime;
-
-                golioth_coap_req_reply_handler(req, rx);
-            }
-        }
-
-        break;
-    }
-
-    golioth_sys_mutex_unlock(client->coap_reqs_lock);
+    golioth_request_list_process_response(client, rx, rx_id, rx_token, rx_tkl, observe_seq);
 }
 
 /**

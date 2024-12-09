@@ -76,14 +76,32 @@ static void req_list_remove_unsafe(struct golioth_coap_req *req)
     }
 }
 
-static void req_execute_callback(struct golioth_coap_req *req, enum golioth_status status)
+static void req_execute_callback(struct golioth_coap_req *req,
+                                 enum golioth_status status,
+                                 struct golioth_req_rsp *rsp)
 {
-    struct golioth_req_rsp rsp = {
-        .user_data = req->user_data,
-        .status = status,
-    };
+    struct golioth_req_rsp *safe_rsp = rsp;
+    bool generate_rsp = (rsp == NULL);
 
-    (void) req->cb(&rsp);
+    if (generate_rsp)
+    {
+        safe_rsp = golioth_sys_malloc(sizeof(struct golioth_req_rsp));
+        if (!safe_rsp)
+        {
+            GLTH_LOGE(TAG, "Enable to allocate rsp");
+            return;
+        }
+
+        safe_rsp->user_data = req->user_data;
+        safe_rsp->status = status;
+    }
+
+    (void) req->cb(safe_rsp);
+
+    if (generate_rsp)
+    {
+        free(safe_rsp);
+    }
 }
 
 static void golioth_reqs_connected_set_unsafe(struct golioth_client *client, bool is_connected)
@@ -111,6 +129,19 @@ static bool golioth_coap_pending_cycle(struct golioth_coap_pending *pending)
     pending->retries--;
 
     return true;
+}
+
+/* Reordering according to RFC7641 section 3.4 */
+static inline bool sequence_number_is_newer(int v1, int v2)
+{
+    return (v1 < v2 && v2 - v1 < (1 << 23)) || (v1 > v2 && v1 - v2 > (1 << 23));
+}
+
+static bool golioth_coap_reply_is_newer(struct golioth_coap_reply *reply, int seq, int64_t uptime)
+{
+    /* FIXME: What is this COAP_OBSERVE_TS_DIFF_NEWER? It needs to be abstracted. */
+    return (uptime > reply->ts + COAP_OBSERVE_TS_DIFF_NEWER
+            || sequence_number_is_newer(reply->seq, seq));
 }
 
 void golioth_coap_pending_init(struct golioth_coap_pending *pending, uint8_t retries)
@@ -165,7 +196,7 @@ void golioth_coap_reqs_cancel_all_with_reason(struct golioth_client *client,
         /* Call callbacks */
         if (!req->is_observe)
         {
-            req_execute_callback(req, reason);
+            req_execute_callback(req, reason, NULL);
         }
 
         /* Cancel the request and free memory */
@@ -218,13 +249,18 @@ int64_t golioth_coap_reqs_poll_prepare(struct golioth_client *client, int64_t no
     golioth_sys_mutex_lock(client->coap_reqs_lock, GOLIOTH_SYS_WAIT_FOREVER);
 
     struct golioth_coap_req *req = client->coap_reqs;
+    struct golioth_coap_req *next;
+
     int64_t min_timeout = INT64_MAX;
 
     while(req)
     {
+        /* Copy next node pointer in case we remove this request */
+        next = req->next;
+
         if (req->is_observe && !req->is_pending)
         {
-            req = req->next;
+            req = next;
             continue;
         }
 
@@ -247,7 +283,7 @@ int64_t golioth_coap_reqs_poll_prepare(struct golioth_client *client, int64_t no
             if (!send)
             {
                 LOG_WRN("Packet %p (reply %p) was not replied to", (void *) req, (void *) &req->reply);
-                req_execute_callback(req, GOLIOTH_ERR_TIMEOUT);
+                req_execute_callback(req, GOLIOTH_ERR_TIMEOUT, NULL);
                 req_list_remove_unsafe(req);
                 golioth_coap_req_free(req);
 
@@ -286,10 +322,93 @@ int64_t golioth_coap_reqs_poll_prepare(struct golioth_client *client, int64_t no
         }
 
         min_timeout = MIN(min_timeout, req_timeout);
-        req = req->next;
+        req = next;
     }
 
     golioth_sys_mutex_unlock(client->coap_reqs_lock);
 
     return min_timeout;
+}
+
+void golioth_request_list_process_response(struct golioth_client *client,
+                                           const struct coap_packet *response,
+                                           uint16_t rx_id,
+                                           uint8_t rx_token[COAP_TOKEN_MAX_LEN],
+                                           uint8_t rx_tkl,
+                                           int observe_seq)
+{
+    golioth_sys_mutex_lock(client->coap_reqs_lock, GOLIOTH_SYS_WAIT_FOREVER);
+
+    struct golioth_coap_req *req = client->coap_reqs;
+
+    while(req)
+    {
+        uint16_t req_id = coap_header_get_id(&req->request);
+        uint8_t req_token[COAP_TOKEN_MAX_LEN];
+        uint8_t req_tkl = coap_header_get_token(&req->request, req_token);
+
+        if (req_id == 0U && req_tkl == 0U)
+        {
+            req = req->next;
+            continue;
+        }
+
+        /* Piggybacked must match id when token is empty */
+        if (req_id != rx_id && rx_tkl == 0U)
+        {
+            req = req->next;
+            continue;
+        }
+
+        if (rx_tkl > 0 && memcmp(req_token, rx_token, rx_tkl))
+        {
+            req = req->next;
+            continue;
+        }
+
+        if (observe_seq == -ENOENT)
+        {
+            enum golioth_status status;
+            struct golioth_req_rsp rsp;
+            bool run_callback_and_remove;
+
+            status = golioth_coap_req_reply_handler(req, response, &rsp, &run_callback_and_remove);
+
+            if (run_callback_and_remove)
+            {
+                req_execute_callback(req, status, &rsp);
+                req_list_remove_unsafe(req);
+                golioth_coap_req_free(req);
+            }
+        }
+        else
+        {
+            int64_t uptime = k_uptime_get();
+
+            /* handle observed requests only if received in order */
+            if (golioth_coap_reply_is_newer(&req->reply, observe_seq, uptime))
+            {
+                req->reply.seq = observe_seq;
+                req->reply.ts = uptime;
+
+                enum golioth_status status;
+                struct golioth_req_rsp rsp;
+                bool run_callback_and_remove;
+
+                status =
+                    golioth_coap_req_reply_handler(req, response, &rsp, &run_callback_and_remove);
+
+                if (run_callback_and_remove)
+                {
+                    req_execute_callback(req, status, &rsp);
+                    req_list_remove_unsafe(req);
+                    golioth_coap_req_free(req);
+                }
+            }
+        }
+
+        break;
+    }
+
+    golioth_sys_mutex_unlock(client->coap_reqs_lock);
 }
