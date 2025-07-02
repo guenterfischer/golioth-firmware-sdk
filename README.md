@@ -32,7 +32,7 @@ API documentation: https://firmware-sdk-docs.golioth.io/
 This repo uses git submodules, so you will need to clone with the `--recursive` option:
 
 ```sh
-git clone --recursive https://github.com/golioth/golioth-firmware-sdk.git -b v0.17.0
+git clone --recursive https://github.com/golioth/golioth-firmware-sdk.git -b v0.18.1
 ```
 
 Or, if you've already cloned but forgot the `--recursive`, you can update and
@@ -79,12 +79,12 @@ each of the samples is also continously verified on target.
 
 | Board                | Platform                 |
 | ---                  | ---                      |
-| ESP32-S3-DevKitC-1   | ESP-IDF (v5.4.0)         |
-| ESP32-C3-DevKitM-1   | ESP-IDF (v5.4.0)         |
-| ESP32-DevKitC-WROVER | ESP-IDF (v5.4.0)         |
-| ESP32-DevKitC-WROVER | Zephyr (v4.0.0)          |
-| nRF52840 DK + ESP32  | Zephyr (v4.0.0)          |
-| MIMXRT1024-EVK       | Zephyr (v4.0.0)          |
-| RAK5010              | Zephyr (v4.0.0)          |
-| nRF9160 DK           | nRF Connect SDK (v2.8.0) |
+| ESP32-S3-DevKitC-1   | ESP-IDF (v5.4.1)         |
+| ESP32-C3-DevKitM-1   | ESP-IDF (v5.4.1)         |
+| ESP32-DevKitC-WROVER | ESP-IDF (v5.4.1)         |
+| ESP32-DevKitC-WROVER | Zephyr (v4.1.0)          |
+| FRDM-RW612           | Zephyr (v4.1.0)          |
+| nRF52840 DK + ESP32  | Zephyr (v4.1.0)          |
+| RAK5010              | Zephyr (v4.1.0)          |
+| nRF9160 DK           | nRF Connect SDK (v3.0.1) |
 | CY8CPROTO-062-4343W  | ModusToolbox (3.3.0)     |

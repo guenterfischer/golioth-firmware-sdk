@@ -27,7 +27,7 @@ Execute this command to download this repository together with all
 dependencies:
 
 ```console
-west init -m https://github.com/golioth/golioth-firmware-sdk.git --mr v0.17.0 --mf west-zephyr.yml
+west init -m https://github.com/golioth/golioth-firmware-sdk.git --mr v0.18.1 --mf west-zephyr.yml
 west update
 cd modules/lib/golioth-firmware-sdk && git submodule update --init --recursive
 ```
@@ -42,7 +42,7 @@ Execute this command to download this repository together with all
 dependencies:
 
 ```console
-west init -m https://github.com/golioth/golioth-firmware-sdk.git --mr v0.17.0 --mf west-ncs.yml
+west init -m https://github.com/golioth/golioth-firmware-sdk.git --mr v0.18.1 --mf west-ncs.yml
 west update
 cd modules/lib/golioth-firmware-sdk && git submodule update --init --recursive
 ```
@@ -62,7 +62,7 @@ based project (e.g. Zephyr RTOS):
 # Golioth repository.
 - name: golioth
   path: modules/lib/golioth-firmware-sdk
-  revision: v0.17.0
+  revision: v0.18.0
   url: https://github.com/golioth/golioth-firmware-sdk.git
   submodules: true
 ```
@@ -84,24 +84,26 @@ west update
 
 # Sample applications
 
-  - [Golioth Basics sample](golioth_basics/README.md)
   - [Golioth Certificate Provisioning sample](certificate_provisioning/README.md)
   - [Golioth FW Update sample](fw_update/README.md)
   - [Golioth Hello sample](hello/README.md)
-  - [Golioth LightDB get sample](lightdb/get/README.md)
-  - [Golioth LightDB observe sample](lightdb/observe/README.md)
-  - [Golioth LightDB set sample](lightdb/set/README.md)
-  - [Golioth Stream sample](stream/README.md)
+  - [Golioth LightDB DELETE sample](lightdb/delete/README.md)
+  - [Golioth LightDB GET sample](lightdb/get/README.md)
+  - [Golioth LightDB OBSERVE sample](lightdb/observe/README.md)
+  - [Golioth LightDB SET sample](lightdb/set/README.md)
+  - [Golioth Location sample](location/README.md)
   - [Golioth Logging sample](logging/README.md)
   - [Golioth RPC sample](rpc/README.md)
   - [Golioth Settings sample](settings/README.md)
+  - [Golioth Stream sample](stream/README.md)
 
 # Golioth Services
 
   - [Golioth Cloud](https://docs.golioth.io/cloud)
-  - [LightDB
-    state](https://docs.golioth.io/reference/protocols/coap/lightdb)
-  - [Stream](https://docs.golioth.io/reference/protocols/coap/streaming-data)
-  - [Logging](https://docs.golioth.io/reference/protocols/coap/logging)
-  - [OTA](https://docs.golioth.io/reference/protocols/coap/ota)
-  - [Authentication](https://docs.golioth.io/firmware/zephyr-device-sdk/authentication)
+  - [Authentication](https://docs.golioth.io/reference/device-api/device-auth)
+  - [LightDB](https://docs.golioth.io/reference/device-api/api-docs/lightdb)
+  - [Location](https://docs.golioth.io/reference/device-api/api-docs/location)
+  - [Logging](https://docs.golioth.io/reference/device-api/api-docs/logging)
+  - [OTA](https://docs.golioth.io/reference/device-api/api-docs/ota)
+  - [RPC](https://docs.golioth.io/reference/device-api/api-docs/rpc)
+  - [Stream](https://docs.golioth.io/reference/device-api/api-docs/streaming-data)

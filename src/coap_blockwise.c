@@ -24,7 +24,6 @@ struct blockwise_transfer
 {
     struct golioth_client *client;
     enum golioth_content_type content_type;
-    golioth_sys_sem_t sem;
     uint8_t token[GOLIOTH_COAP_TOKEN_LEN];
     const char *path_prefix;
     const char *path;
@@ -47,51 +46,38 @@ struct post_block_ctx
     read_block_cb read_cb;
     void *callback_arg;
 
-    struct blockwise_transfer *transfer_ctx;
+    struct blockwise_transfer transfer_ctx;
 };
 
 struct get_block_ctx
 {
-    size_t rcvd_bytes;
-    enum golioth_status status;
-    struct golioth_coap_rsp_code coap_rsp_code;
-    golioth_sys_sem_t sem;
-    bool is_last;
-
     size_t block_size;
     uint32_t block_idx;
-    uint8_t *block_buffer;
-    write_block_cb write_cb;
+    golioth_get_block_cb_fn get_cb;
+    golioth_end_block_cb_fn end_cb;
     void *callback_arg;
 
-    struct blockwise_transfer *transfer_ctx;
+    struct blockwise_transfer transfer_ctx;
 };
 
 // Function to initialize the blockwise_transfer structure
-static struct blockwise_transfer *blockwise_transfer_init(struct golioth_client *client,
-                                                          const char *path_prefix,
-                                                          const char *path,
-                                                          enum golioth_content_type content_type)
+static void blockwise_transfer_init(struct blockwise_transfer *ctx,
+                                    struct golioth_client *client,
+                                    const char *path_prefix,
+                                    const char *path,
+                                    enum golioth_content_type content_type)
 {
-    struct blockwise_transfer *ctx = golioth_sys_malloc(sizeof(struct blockwise_transfer));
-    if (NULL == ctx)
-    {
-        return NULL;
-    }
-
     ctx->client = client;
     ctx->path_prefix = path_prefix;
     ctx->path = path;
     ctx->content_type = content_type;
     golioth_coap_next_token(ctx->token);
-
-    return ctx;
 }
 
 // Function to free the blockwise_transfer structure
 static void blockwise_transfer_free(struct blockwise_transfer *ctx)
 {
-    free(ctx);
+    golioth_sys_free(ctx);
 }
 
 /* Blockwise Uploads related functions */
@@ -161,11 +147,11 @@ static enum golioth_status upload_single_block(struct golioth_client *client,
     assert(block_size > 0 && block_size <= ctx->block_size);
 
     enum golioth_status err = golioth_coap_client_set_block(client,
-                                                            ctx->transfer_ctx->token,
-                                                            ctx->transfer_ctx->path_prefix,
-                                                            ctx->transfer_ctx->path,
+                                                            ctx->transfer_ctx.token,
+                                                            ctx->transfer_ctx.path_prefix,
+                                                            ctx->transfer_ctx.path,
                                                             ctx->is_last,
-                                                            ctx->transfer_ctx->content_type,
+                                                            ctx->transfer_ctx.content_type,
                                                             ctx->block_idx,
                                                             ctx->negotiated_blocksize_szx,
                                                             ctx->block_buffer,
@@ -237,22 +223,18 @@ enum golioth_status golioth_blockwise_post(struct golioth_client *client,
         goto finish;
     }
 
+    blockwise_transfer_init(&ctx->transfer_ctx, client, path_prefix, path, content_type);
+
     ctx->block_buffer = golioth_sys_malloc(CONFIG_GOLIOTH_BLOCKWISE_UPLOAD_MAX_BLOCK_SIZE);
     if (NULL == ctx->block_buffer)
     {
         goto finish_with_post_block_ctx;
     }
 
-    ctx->transfer_ctx = blockwise_transfer_init(client, path_prefix, path, content_type);
-    if (NULL == ctx->transfer_ctx)
-    {
-        goto finish_with_block_buffer;
-    }
-
     ctx->sem = golioth_sys_sem_create(1, 0);
     if (NULL == ctx->sem)
     {
-        goto finish_with_transfer_ctx;
+        goto finish_with_block_buffer;
     }
 
     ctx->status = GOLIOTH_ERR_FAIL, ctx->is_last = false;
@@ -293,9 +275,6 @@ enum golioth_status golioth_blockwise_post(struct golioth_client *client,
     /* Upload complete, clean up allocated resources */
     golioth_sys_sem_destroy(ctx->sem);
 
-finish_with_transfer_ctx:
-    blockwise_transfer_free(ctx->transfer_ctx);
-
 finish_with_block_buffer:
     free(ctx->block_buffer);
 
@@ -323,12 +302,13 @@ struct blockwise_transfer *golioth_blockwise_upload_start(struct golioth_client 
         return NULL;
     }
 
-    struct blockwise_transfer *ctx =
-        blockwise_transfer_init(client, path_prefix, path, content_type);
+    struct blockwise_transfer *ctx = golioth_sys_malloc(sizeof(struct blockwise_transfer));
     if (NULL == ctx)
     {
         return NULL;
     }
+
+    blockwise_transfer_init(ctx, client, path_prefix, path, content_type);
 
     /* Allocate and store path; freed in golioth_blockwise_upload_finish() */
     char *path_buff = golioth_sys_malloc(strlen(path) + 1);
@@ -350,6 +330,12 @@ finish_with_ctx:
 // Destroy an async upload context
 void golioth_blockwise_upload_finish(struct blockwise_transfer *ctx)
 {
+    if (NULL == ctx)
+    {
+        GLTH_LOGW(TAG, "Attempt to free NULL context");
+        return;
+    }
+
     /* ctx->path was allocated in golioth_blockwise_upload_start() */
     free((char *) ctx->path);
     blockwise_transfer_free(ctx);
@@ -390,25 +376,8 @@ enum golioth_status golioth_blockwise_upload_block(struct blockwise_transfer *ct
 
 /* Blockwise Downloads related functions */
 
-// Function to call the application's write block callback after a successful
-// blockwise download
-static enum golioth_status call_write_block_callback(struct get_block_ctx *ctx)
-{
-    enum golioth_status status = ctx->write_cb(ctx->block_idx,
-                                               ctx->block_buffer,
-                                               ctx->rcvd_bytes,
-                                               ctx->is_last,
-                                               ctx->block_size,
-                                               ctx->callback_arg);
-
-    if (GOLIOTH_OK == status)
-    {
-        /* Only advance block_idx if block was stored successfully */
-        ctx->block_idx++;
-    }
-
-    return status;
-}
+static enum golioth_status download_single_block(struct golioth_client *client,
+                                                 struct get_block_ctx *ctx);
 
 // Blockwise download's internal callback function that the COAP client calls
 static void on_block_rcvd(struct golioth_client *client,
@@ -424,142 +393,82 @@ static void on_block_rcvd(struct golioth_client *client,
     assert(arg);
     assert(payload_size <= CONFIG_GOLIOTH_BLOCKWISE_DOWNLOAD_MAX_BLOCK_SIZE);
     struct get_block_ctx *ctx = arg;
-    assert(ctx->block_buffer);
 
-    // copy blockwise download values returned by COAP client into ctx
-    ctx->status = status;
-    ctx->is_last = is_last;
-    memcpy(ctx->block_buffer, payload, payload_size);
-    ctx->rcvd_bytes = payload_size;
+    if (GOLIOTH_OK == status)
+    {
+        status = ctx->get_cb(client,
+                             path,
+                             ctx->block_idx,
+                             payload,
+                             payload_size,
+                             is_last,
+                             ctx->block_size,
+                             ctx->callback_arg);
+    }
 
-    golioth_sys_sem_give(ctx->sem);
+    if (is_last || GOLIOTH_OK != status)
+    {
+        ctx->end_cb(client, status, coap_rsp_code, path, ctx->block_idx, ctx->callback_arg);
+
+        golioth_sys_free(ctx);
+    }
+    else
+    {
+        ctx->block_idx++;
+        status = download_single_block(client, ctx);
+        if (GOLIOTH_OK != status)
+        {
+            ctx->end_cb(client, status, NULL, path, ctx->block_idx, ctx->callback_arg);
+
+            golioth_sys_free(ctx);
+        }
+    }
 }
 
 // Function to download a single block
 static enum golioth_status download_single_block(struct golioth_client *client,
                                                  struct get_block_ctx *ctx)
 {
-    ctx->status = GOLIOTH_ERR_FAIL;
-    ctx->is_last = false;
-    ctx->rcvd_bytes = 0;
-
-    enum golioth_status err = golioth_coap_client_get_block(client,
-                                                            ctx->transfer_ctx->token,
-                                                            ctx->transfer_ctx->path_prefix,
-                                                            ctx->transfer_ctx->path,
-                                                            ctx->transfer_ctx->content_type,
-                                                            ctx->block_idx,
-                                                            ctx->block_size,
-                                                            on_block_rcvd,
-                                                            ctx,
-                                                            false,
-                                                            GOLIOTH_SYS_WAIT_FOREVER);
-    if (GOLIOTH_OK == err)
-    {
-        golioth_sys_sem_take(ctx->sem, GOLIOTH_SYS_WAIT_FOREVER);
-        err = ctx->status;
-    }
-
-    return err;
-}
-
-// Function to manage blockwise downloads and handle errors
-static enum golioth_status process_blockwise_downloads(struct golioth_client *client,
-                                                       struct get_block_ctx *ctx)
-{
-    enum golioth_status status = download_single_block(client, ctx);
-
-    if (status == GOLIOTH_OK)
-    {
-        status = call_write_block_callback(ctx);
-    }
-
-    return status;
+    return golioth_coap_client_get_block(client,
+                                         ctx->transfer_ctx.token,
+                                         ctx->transfer_ctx.path_prefix,
+                                         ctx->transfer_ctx.path,
+                                         ctx->transfer_ctx.content_type,
+                                         ctx->block_idx,
+                                         ctx->block_size,
+                                         on_block_rcvd,
+                                         ctx,
+                                         false,
+                                         GOLIOTH_SYS_WAIT_FOREVER);
 }
 
 enum golioth_status golioth_blockwise_get(struct golioth_client *client,
                                           const char *path_prefix,
                                           const char *path,
                                           enum golioth_content_type content_type,
-                                          uint32_t *block_idx,
-                                          write_block_cb cb,
+                                          uint32_t block_idx,
+                                          golioth_get_block_cb_fn block_cb,
+                                          golioth_end_block_cb_fn end_cb,
                                           void *callback_arg)
 {
-    enum golioth_status status = GOLIOTH_ERR_FAIL;
-    if (NULL == client || NULL == path || NULL == cb)
+    if (NULL == client || NULL == path || NULL == block_cb || NULL == end_cb)
     {
         return GOLIOTH_ERR_NULL;
     }
 
-    status = GOLIOTH_ERR_MEM_ALLOC;
-
-    struct get_block_ctx *ctx = malloc(sizeof(struct get_block_ctx));
+    struct get_block_ctx *ctx = golioth_sys_malloc(sizeof(struct get_block_ctx));
     if (NULL == ctx)
     {
-        goto finish;
+        return GOLIOTH_ERR_MEM_ALLOC;
     }
 
-    ctx->block_buffer = malloc(CONFIG_GOLIOTH_BLOCKWISE_DOWNLOAD_MAX_BLOCK_SIZE);
-    if (NULL == ctx->block_buffer)
-    {
-        goto finish_with_ctx;
-    }
+    blockwise_transfer_init(&ctx->transfer_ctx, client, path_prefix, path, content_type);
 
-    ctx->transfer_ctx = blockwise_transfer_init(client, path_prefix, path, content_type);
-    if (NULL == ctx->transfer_ctx)
-    {
-        goto finish_with_block_buffer;
-    }
-
-    ctx->sem = golioth_sys_sem_create(1, 0);
-    if (NULL == ctx->sem)
-    {
-        goto finish_with_transfer_ctx;
-    }
-
-    ctx->status = GOLIOTH_ERR_FAIL;
-    ctx->rcvd_bytes = 0;
-    ctx->is_last = false;
     ctx->block_size = CONFIG_GOLIOTH_BLOCKWISE_DOWNLOAD_MAX_BLOCK_SIZE;
-    ctx->write_cb = cb;
+    ctx->get_cb = block_cb;
+    ctx->end_cb = end_cb;
     ctx->callback_arg = callback_arg;
+    ctx->block_idx = block_idx;
 
-    if (block_idx)
-    {
-        ctx->block_idx = *block_idx;
-    }
-    else
-    {
-        ctx->block_idx = 0;
-    }
-
-
-    while (!ctx->is_last)
-    {
-        if ((status = process_blockwise_downloads(client, ctx)) != GOLIOTH_OK)
-        {
-            break;
-        }
-    }
-
-    if (block_idx)
-    {
-        *block_idx = ctx->block_idx;
-    }
-
-    /* Download complete. Clean up allocated resources. */
-
-    golioth_sys_sem_destroy(ctx->sem);
-
-finish_with_transfer_ctx:
-    blockwise_transfer_free(ctx->transfer_ctx);
-
-finish_with_block_buffer:
-    free(ctx->block_buffer);
-
-finish_with_ctx:
-    free(ctx);
-
-finish:
-    return status;
+    return download_single_block(client, ctx);
 }

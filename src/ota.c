@@ -13,6 +13,7 @@
 #include "coap_client.h"
 #include <golioth/golioth_debug.h>
 #include <golioth/golioth_sys.h>
+#include "golioth/client.h"
 #include "golioth_util.h"
 #include <golioth/zcbor_utils.h>
 
@@ -20,7 +21,8 @@
 
 LOG_TAG_DEFINE(golioth_ota);
 
-#define GOLIOTH_OTA_MANIFEST_PATH ".u/desired"
+#define GOLIOTH_OTA_MANIFEST_PATH_PREFIX ".u/"
+#define GOLIOTH_OTA_MANIFEST_PATH_DESIRED "desired"
 #define GOLIOTH_OTA_COMPONENT_PATH_PREFIX ".u/c/"
 
 enum
@@ -93,11 +95,45 @@ enum golioth_status golioth_ota_observe_manifest_async(struct golioth_client *cl
 
     return golioth_coap_client_observe(client,
                                        token,
-                                       "",
-                                       GOLIOTH_OTA_MANIFEST_PATH,
+                                       GOLIOTH_OTA_MANIFEST_PATH_PREFIX,
+                                       GOLIOTH_OTA_MANIFEST_PATH_DESIRED,
                                        GOLIOTH_CONTENT_TYPE_CBOR,
                                        callback,
                                        arg);
+}
+
+enum golioth_status golioth_ota_get_manifest_async(struct golioth_client *client,
+                                                   golioth_get_cb_fn callback,
+                                                   void *arg)
+{
+    uint8_t token[GOLIOTH_COAP_TOKEN_LEN];
+    golioth_coap_next_token(token);
+
+    return golioth_coap_client_get(client,
+                                   token,
+                                   GOLIOTH_OTA_MANIFEST_PATH_PREFIX,
+                                   GOLIOTH_OTA_MANIFEST_PATH_DESIRED,
+                                   GOLIOTH_CONTENT_TYPE_CBOR,
+                                   callback,
+                                   arg,
+                                   false,
+                                   GOLIOTH_SYS_WAIT_FOREVER);
+}
+
+enum golioth_status golioth_ota_blockwise_manifest_async(struct golioth_client *client,
+                                                         size_t block_idx,
+                                                         golioth_get_block_cb_fn block_cb,
+                                                         golioth_end_block_cb_fn end_cb,
+                                                         void *arg)
+{
+    return golioth_blockwise_get(client,
+                                 GOLIOTH_OTA_MANIFEST_PATH_PREFIX,
+                                 GOLIOTH_OTA_MANIFEST_PATH_DESIRED,
+                                 GOLIOTH_CONTENT_TYPE_CBOR,
+                                 block_idx,
+                                 block_cb,
+                                 end_cb,
+                                 arg);
 }
 
 enum golioth_status golioth_ota_report_state_sync(struct golioth_client *client,
@@ -345,39 +381,63 @@ static void on_block_rcvd(struct golioth_client *client,
 struct ota_component_blockwise_ctx
 {
     const struct golioth_ota_component *component;
-    ota_component_block_write_cb cb;
+    ota_component_block_write_cb block_cb;
+    ota_component_download_end_cb end_cb;
     void *arg;
 };
 
-static enum golioth_status ota_component_write_cb_wrapper(uint32_t block_idx,
-                                                          uint8_t *block_buffer,
+static enum golioth_status ota_component_write_cb_wrapper(struct golioth_client *client,
+                                                          const char *path,
+                                                          uint32_t block_idx,
+                                                          const uint8_t *block_buffer,
                                                           size_t block_buffer_len,
                                                           bool is_last,
                                                           size_t negotiated_block_size,
-                                                          void *callback_arg)
+                                                          void *arg)
 {
-    struct ota_component_blockwise_ctx *ctx = callback_arg;
+    assert(arg);
+    struct ota_component_blockwise_ctx *ctx = arg;
 
-    return ctx->cb(ctx->component,
-                   block_idx,
-                   block_buffer,
-                   block_buffer_len,
-                   is_last,
-                   negotiated_block_size,
-                   ctx->arg);
+    enum golioth_status status = ctx->block_cb(ctx->component,
+                                               block_idx,
+                                               block_buffer,
+                                               block_buffer_len,
+                                               is_last,
+                                               negotiated_block_size,
+                                               ctx->arg);
+
+    return status;
+}
+
+static void ota_component_download_end_cb_wrapper(struct golioth_client *client,
+                                                  enum golioth_status status,
+                                                  const struct golioth_coap_rsp_code *coap_rsp_code,
+                                                  const char *path,
+                                                  uint32_t block_idx,
+                                                  void *arg)
+{
+    assert(arg);
+    struct ota_component_blockwise_ctx *ctx = arg;
+
+    ctx->end_cb(status, coap_rsp_code, ctx->component, block_idx, ctx->arg);
+
+    golioth_sys_free(ctx);
 }
 
 enum golioth_status golioth_ota_download_component(struct golioth_client *client,
                                                    const struct golioth_ota_component *component,
-                                                   uint32_t *block_idx,
-                                                   ota_component_block_write_cb cb,
+                                                   uint32_t block_idx,
+                                                   ota_component_block_write_cb block_cb,
+                                                   ota_component_download_end_cb end_cb,
                                                    void *arg)
 {
-    struct ota_component_blockwise_ctx ctx = {
-        .component = component,
-        .cb = cb,
-        .arg = arg,
-    };
+    struct ota_component_blockwise_ctx *ctx =
+        golioth_sys_malloc(sizeof(struct ota_component_blockwise_ctx));
+    ctx->component = component;
+    ctx->block_cb = block_cb;
+    ctx->end_cb = end_cb;
+    ctx->arg = arg;
+
 
     return golioth_blockwise_get(client,
                                  "",
@@ -385,7 +445,8 @@ enum golioth_status golioth_ota_download_component(struct golioth_client *client
                                  GOLIOTH_CONTENT_TYPE_OCTET_STREAM,
                                  block_idx,
                                  ota_component_write_cb_wrapper,
-                                 &ctx);
+                                 ota_component_download_end_cb_wrapper,
+                                 ctx);
 }
 
 enum golioth_status golioth_ota_get_block_sync(struct golioth_client *client,

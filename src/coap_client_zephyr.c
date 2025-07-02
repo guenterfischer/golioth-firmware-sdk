@@ -12,6 +12,7 @@
 
 #include "coap_client_zephyr.h"
 #include "pathv.h"
+#include "zephyr/net/coap.h"
 #include "zephyr_coap_req.h"
 #include "zephyr_coap_utils.h"
 
@@ -31,7 +32,8 @@ LOG_TAG_DEFINE(golioth_coap_client_zephyr);
 
 enum
 {
-    FLAG_STOP_CLIENT,
+    CLIENT_FLAG_STOP,
+    CLIENT_FLAG_COUNT,
 };
 
 #define RECV_TIMEOUT (CONFIG_GOLIOTH_COAP_CLIENT_RX_TIMEOUT_SEC * 1000)
@@ -44,7 +46,7 @@ enum pollfd_type
     NUM_POLLFDS,
 };
 
-static atomic_t flags;
+static ATOMIC_DEFINE(client_flags, CLIENT_FLAG_COUNT);
 
 static uint8_t rx_buffer[CONFIG_GOLIOTH_COAP_CLIENT_RX_BUF_SIZE];
 
@@ -385,6 +387,15 @@ static int golioth_coap_get_block(struct golioth_coap_request_msg *req)
 
     coap_req->block_ctx.current = (req->get_block.block_index * req->get_block.block_size);
     coap_req->block_ctx.block_size = coap_bytes_to_block_size(req->get_block.block_size);
+
+    err = coap_append_option_int(&coap_req->request,
+                                 COAP_OPTION_ACCEPT,
+                                 golioth_content_type_to_coap_format(req->get_block.content_type));
+    if (err)
+    {
+        LOG_ERR("Unable to add content type to packet, err: %d", err);
+        goto free_req;
+    }
 
     err = golioth_coap_req_append_block2_option(coap_req);
     if (err)
@@ -1302,7 +1313,7 @@ static void golioth_coap_client_thread(void *arg)
 
             if (event_occurred)
             {
-                bool stop_request = atomic_test_and_clear_bit(&flags, FLAG_STOP_CLIENT);
+                bool stop_request = atomic_test_and_clear_bit(client_flags, CLIENT_FLAG_STOP);
                 bool receive_timeout = (recv_expiry <= k_uptime_get());
 
                 /*
@@ -1631,7 +1642,7 @@ enum golioth_status golioth_client_start(struct golioth_client *client)
     {
         return GOLIOTH_ERR_NULL;
     }
-    atomic_clear_bit(&flags, FLAG_STOP_CLIENT);
+    atomic_clear_bit(client_flags, CLIENT_FLAG_STOP);
     k_sem_give(&client->run_sem);
     return GOLIOTH_OK;
 }
@@ -1647,7 +1658,7 @@ enum golioth_status golioth_client_stop(struct golioth_client *client)
 
     k_sem_take(&client->run_sem, K_NO_WAIT);
 
-    atomic_set_bit(&flags, FLAG_STOP_CLIENT);
+    atomic_set_bit(client_flags, CLIENT_FLAG_STOP);
 
     golioth_client_wakeup(client);
 

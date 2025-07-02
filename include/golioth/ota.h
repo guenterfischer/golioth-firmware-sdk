@@ -142,9 +142,44 @@ enum golioth_status golioth_ota_observe_manifest_async(struct golioth_client *cl
                                                        golioth_get_cb_fn callback,
                                                        void *arg);
 
+/// Get the OTA manifest asynchronously
+///
+/// This function will enqueue a request and return immediately without waiting for a response from
+/// the server. The callback will be invoked when the manifest is received from the Golioth server.
+///
+/// @param client The client handle from @ref golioth_client_create
+/// @param callback Callback function to register
+/// @param arg Optional argument, forwarded directly to the callback when invoked. Can be NULL.
+enum golioth_status golioth_ota_get_manifest_async(struct golioth_client *client,
+                                                   golioth_get_cb_fn callback,
+                                                   void *arg);
+
+/// Get the OTA manifest asynchronously using blockwise download
+///
+/// Use this function to perform a blockwise get of the OTA manifest in CBOR format. This may be
+/// used to retrieve manifests of any size, but is required to get a manifest that is larger than
+/// CONFIG_GOLIOTH_BLOCKWISE_DOWNLOAD_MAX_BLOCK_SIZE (1024 bytes or smaller).
+///
+/// This function will enqueue a request and return immediately without waiting for a response from
+/// the server. The \p block_cb will be called once for each block received from the server. The \p
+/// end_cb will be called exactly one time at the conclusion (successful or otherwise) of the
+/// manifest download.
+///
+/// @param client The client handle from @ref golioth_client_create
+/// @param block_idx The index of the first block to download. Callers can resume a blockwise
+///                  download by passing in a non-zero block_idx.
+/// @param block_cb Callback for receiving a block of data. See @ref golioth_get_block_cb_fn
+/// @param end_cb Callabck for the end of a download. See @ref golioth_end_block_cb_fn
+/// @param arg Optional argument, forwarded directly to the callback when invoked. Can be NULL.
+enum golioth_status golioth_ota_blockwise_manifest_async(struct golioth_client *client,
+                                                         size_t block_idx,
+                                                         golioth_get_block_cb_fn block_cb,
+                                                         golioth_end_block_cb_fn end_cb,
+                                                         void *arg);
+
 /// Callback for OTA download component request
 ///
-/// Will be called repeatedly, once for each block received from the server.
+/// Will be called 0 or more times, once for each block received from the server.
 ///
 /// @param component The @ref golioth_ota_component pointer from the original request
 /// @param block_idx The block number in sequence (starting with 0)
@@ -156,11 +191,28 @@ enum golioth_status golioth_ota_observe_manifest_async(struct golioth_client *cl
 typedef enum golioth_status (*ota_component_block_write_cb)(
     const struct golioth_ota_component *component,
     uint32_t block_idx,
-    uint8_t *block_buffer,
+    const uint8_t *block_buffer,
     size_t block_buffer_len,
     bool is_last,
     size_t negotiated_block_size,
     void *arg);
+
+/// Callback for the end of an OTA download
+///
+/// Will be called exactly one time for each successful call to golioth_ota_download_component
+///
+/// @param status The result of the blockwise download
+/// @param rsp_code If status is GOLIOTH_ERR_COAP_RESPONSE then this pointer contains the CoAP
+/// response code
+/// @param component The @ref golioth_ota_component pointer from the original request
+/// @param block_idx The Users can resume an OTA download by passing this value to the block_idx
+/// argument of @ref golioth_ota_download_component
+/// @param arg User supplied argument. Can be NULL.
+typedef void (*ota_component_download_end_cb)(enum golioth_status status,
+                                              const struct golioth_coap_rsp_code *rsp_code,
+                                              const struct golioth_ota_component *component,
+                                              uint32_t block_idx,
+                                              void *arg);
 
 /// Begin or resume downloading an OTA component synchronously.
 ///
@@ -178,11 +230,10 @@ typedef enum golioth_status (*ota_component_block_write_cb)(
 /// @param client The client handle from @ref golioth_client_create
 /// @param component One @ref golioth_ota_component instance present in the @ref
 /// golioth_ota_manifest
-/// @param[in,out] block_idx Pointer to the next expected block index. The function will
-/// request the block index supplied as an input, when returning, this variable indicates the next
-/// block index expected. When an error status is returned, use this value as the input for the next
-/// resume operation. May be NULL to begin download with block_idx 0.
-/// @param cb Callback function to register
+/// @param block_idx The index of the first block to download. Callers can resume a blockwise
+/// download by passing in a non-zero block_idx.
+/// @param block_cb Callback for receiving a block of data. See @ref ota_component_block_write_cb
+/// @param end_cb Callabck for the end of a download. See @ref ota_component_download_end_cb
 /// @param arg Optional argument, forwarded directly to the callback when invoked. Can be NULL.
 ///
 /// @retval GOLIOTH_OK the final block of package was received
@@ -190,8 +241,9 @@ typedef enum golioth_status (*ota_component_block_write_cb)(
 /// @retval GOLIOTH_ERR_MEM_ALLOC unable to allocate necessary memory
 enum golioth_status golioth_ota_download_component(struct golioth_client *client,
                                                    const struct golioth_ota_component *component,
-                                                   uint32_t *block_idx,
-                                                   ota_component_block_write_cb cb,
+                                                   uint32_t block_idx,
+                                                   ota_component_block_write_cb block_cb,
+                                                   ota_component_download_end_cb end_cb,
                                                    void *arg);
 
 /// Get a single artfifact block synchronously

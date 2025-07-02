@@ -42,9 +42,10 @@ jobs:
     name: zephyr-${{ inputs.west_board }}-twister
     runs-on: ubuntu-24.04
     container:
-      image: golioth/golioth-zephyr-base:0.16.8-SDK-v0
+      image: golioth/golioth-zephyr-base:0.17.0-SDK-v0
     env:
-      ZEPHYR_SDK_INSTALL_DIR: /opt/toolchains/zephyr-sdk-0.16.8
+      ZEPHYR_SDK_INSTALL_DIR: /opt/toolchains/zephyr-sdk-0.17.0
+      EXTRA_TWISTER_ARGS: ${{ github.event_name == 'pull_request' && '-e nightly' || '' }}
     steps:
       - name: Checkout repository and submodules
         uses: actions/checkout@v4
@@ -65,7 +66,7 @@ jobs:
           git config --global user.email user@git-scm.com
           git config --global user.name "Git User"
 
-          pip3 install \
+          uv pip install \
             -r zephyr/scripts/requirements-base.txt \
             -r zephyr/scripts/requirements-build-test.txt \
             -r zephyr/scripts/requirements-run-test.txt \
@@ -81,6 +82,7 @@ jobs:
               -T modules/lib/golioth-firmware-sdk/examples/zephyr                   \
               -C --coverage-basedir modules/lib/golioth-firmware-sdk                \
               --coverage-formats txt                                                \
+              ${EXTRA_TWISTER_ARGS}                                                 \
               -x=CONFIG_GOLIOTH_COAP_HOST_URI=\"${{ inputs.coap_gateway_url }}\"    \
               --pytest-args="--api-url=${{ inputs.api-url }}"                       \
               --pytest-args="--api-key=${{ secrets[inputs.api-key-id] }}"           \

@@ -15,52 +15,31 @@ are loaded into the device's filesystem using ``mcumgr``.
 
 ## Building and Running
 
+### Runtime Configuration
+
+#### WiFi Configuration
+
+Devices that use WiFi get their WiFi credentials from the settings subsystem.
+You can set the credentials with the following shell commands:
+
+```sh
+uart:~$ settings set wifi/ssid <ssid>
+uart:~$ settings set wifi/psk <wifi-password>
+uart:-$ kernel reboot cold
+```
+
 ### Platform specific configuration
 
 #### nRF52840 DK + ESP32-WROOM-32
 
-This subsection documents using nRF52840 DK running Zephyr with
-offloaded ESP-AT WiFi driver and ESP32-WROOM-32 module based board (such
-as ESP32 DevkitC rev. 4) running WiFi stack. See [AT Binary
-Lists](https://docs.espressif.com/projects/esp-at/en/latest/AT_Binary_Lists/index.html)
-for links to ESP-AT binaries and details on how to flash ESP-AT image on
-ESP chip. Flash ESP chip with following command:
-
-```console
-esptool.py write_flash --verify 0x0 PATH_TO_ESP_AT/factory/factory_WROOM-32.bin
-```
-
-Connect nRF52840 DK and ESP32-DevKitC V4 (or other ESP32-WROOM-32 based
-board) using wires:
-
-| nRF52840 DK | ESP32-WROOM-32  | ESP32-WROVER-32 | ESP32-C3-MINI-1 |
-| ----------- | --------------- | ----------------| ----------------|
-| P1.01 (RX)  | IO17 (TX)       | IO22 (TX)       | IO7 (TX)        |
-| P1.02 (TX)  | IO16 (RX)       | IO19 (RX)       | IO6 (RX)        |
-| P1.03 (CTS) | IO14 (RTS)      | IO14 (RTS)      | IO4 (RTS)       |
-| P1.04 (RTS) | IO15 (CTS)      | IO15 (CTS)      | IO5 (CTS)       |
-| P1.05       | EN              | EN              | EN              |
-| GND         | GND             | GND             | GND             |
-
-Configure the following Kconfig options based on your WiFi AP
-credentials:
-
-* GOLIOTH_SAMPLE_WIFI_SSID - WiFi SSID
-* GOLIOTH_SAMPLE_WIFI_PSK - WiFi PSK
-
-by adding these lines to configuration file (e.g. `prj.conf` or
-`board/nrf52840dk_nrf52840.conf`):
-
-```cfg
-CONFIG_GOLIOTH_SAMPLE_WIFI_SSID="my-wifi"
-CONFIG_GOLIOTH_SAMPLE_WIFI_PSK="my-psk"
-```
+See [Golioth ESP-AT WiFi
+Shield](../../../zephyr/boards/shields/golioth_esp_at/doc/index.md).
 
 On your host computer open a terminal window, locate the source code of
 this sample application (i.e., `examples/zephyr/certificate_provisioning`) and type:
 
 ```console
-$ west build -b nrf52840dk/nrf52840 examples/zephyr/certificate_provisioning
+$ west build -b nrf52840dk/nrf52840 --shield golioth_esp_at examples/zephyr/certificate_provisioning
 $ west flash
 ```
 
@@ -118,8 +97,8 @@ device over a serial connection.
 
 Certificate authentication requires two files:
 
-1. A Client Certificate, located at `/lfs1/credentials/client_cert.der`
-2. A Private Key, located at `/lfs1/credentials/private_key.der`
+1. A Client Certificate, located at `/lfs1/credentials/crt.der`
+2. A Private Key, located at `/lfs1/credentials/key.der`
 
 ### Loading Files:
 
@@ -138,8 +117,8 @@ Next, exit the serial console, and from the host computer run the
 following:
 
 ```console
-$ mcumgr --conntype serial --connstring=dev=<path/to/your/device>,baud=115200 fs upload keys/client_certificate.der /lfs1/credentials/client_cert.der
-$ mcumgr --conntype serial --connstring=dev=<path/to/your/device>,baud=115200 fs upload keys/private_key.der /lfs1/credentials/private_key.der
+$ mcumgr --conntype serial --connstring=dev=<path/to/your/device>,baud=115200 fs upload keys/client_certificate.der /lfs1/credentials/crt.der
+$ mcumgr --conntype serial --connstring=dev=<path/to/your/device>,baud=115200 fs upload keys/private_key.der /lfs1/credentials/key.der
 ```
 
 Be sure to replace `<path/to/your/device>` with the appropriate serial
@@ -163,8 +142,8 @@ indicating a successful read operation.
 [00:00:00.426,879] <inf> littlefs: LittleFS version 2.5, disk version 2.0
 [00:00:00.427,093] <inf> littlefs: FS at flash-controller@4001e000:0xf8000 is 8 0x1000-byte blocks with 512 cycle
 [00:00:00.427,124] <inf> littlefs: sizes: rd 16 ; pr 16 ; ca 64 ; la 32
-[00:00:00.429,626] <inf> hello_zephyr: Read 352 bytes from /lfs1/credentials/client_cert.der
-[00:00:00.431,243] <inf> hello_zephyr: Read 121 bytes from /lfs1/credentials/private_key.der
+[00:00:00.429,626] <inf> hello_zephyr: Read 352 bytes from /lfs1/credentials/crt.der
+[00:00:00.431,243] <inf> hello_zephyr: Read 121 bytes from /lfs1/credentials/key.der
 [00:00:00.431,274] <inf> golioth_samples: Waiting for interface to be up
 [00:00:02.573,303] <inf> wifi_esp_at: AT version: 2.4.0.0(s-4c6eb5e - ESP32 - May 20 2022 03:12:58)
 [00:00:02.576,477] <inf> wifi_esp_at: SDK version: qa-test-v4.3.3-20220423

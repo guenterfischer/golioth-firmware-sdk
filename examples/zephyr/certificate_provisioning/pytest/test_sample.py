@@ -1,11 +1,12 @@
 import logging
 from pathlib import Path
 import subprocess
-import datetime
-import logging
-from time import sleep
 
 import pytest
+from twister_harness.device.device_adapter import DeviceAdapter
+from twister_harness.device.hardware_adapter import HardwareAdapter
+from twister_harness.device.utils import log_command
+from twister_harness.helpers.domains_helper import get_default_domain_name
 import west.configuration
 
 WEST_TOPDIR = Path(west.configuration.west_dir()).parent
@@ -13,8 +14,6 @@ WEST_TOPDIR = Path(west.configuration.west_dir()).parent
 LOGGER = logging.getLogger(__name__)
 
 FS_SUBDIR = "/lfs1/credentials"
-FS_CRT_PATH = f"{FS_SUBDIR}/client_cert.der"
-FS_KEY_PATH = f"{FS_SUBDIR}/private_key.der"
 
 pytestmark = pytest.mark.anyio
 
@@ -24,7 +23,28 @@ def subprocess_logger(result, log_msg):
     if result.stderr:
         LOGGER.error(f'{log_msg} stderr: {result.stderr}')
 
-async def test_cert_provisioning(request, shell,
+@pytest.fixture
+def lfs_flash_empty(device_object: DeviceAdapter, request):
+    if not isinstance(device_object, HardwareAdapter):
+        return
+
+    build_dir = Path(request.config.option.build_dir)
+    domains = build_dir / 'domains.yaml'
+    if domains.exists():
+        build_dir = build_dir / get_default_domain_name(domains)
+
+    LOGGER.info("Flashing LFS image")
+    device_object.generate_command()
+    command = device_object.command + ["--hex-file", str(build_dir / "lfs.hex")]
+    log_command(LOGGER, "Flashing LFS command", command, level=logging.DEBUG)
+    result = subprocess.run(command,
+                            capture_output=True, text=True,
+                            cwd=str(build_dir),
+                            check=False)
+    subprocess_logger(result, 'LFS flash')
+    assert result.returncode == 0
+
+async def test_cert_provisioning(lfs_flash_empty, request, shell,
                                  project, device_name,
                                  mcumgr_conn_args, certificate_cred,
                                  wifi_ssid, wifi_psk):
@@ -49,28 +69,20 @@ async def test_cert_provisioning(request, shell,
 
     # Set Golioth credential
 
-    shell._device.readlines_until(regex=".*Could not stat /lfs1/credentials/client_cert.der", timeout=180.0)
+    shell._device.readlines_until(regex=".*Could not stat /lfs1/credentials/crt.der", timeout=180.0)
 
     shell.exec_command('fs mkdir /lfs1/credentials')
     shell.exec_command('log halt')
 
-    result = subprocess.run(["mcumgr"] + mcumgr_conn_args +
-                            ["--tries=3", "--timeout=2",
-                             "fs", "upload",
-                             f"{project.info['id']}-{device_name}.crt.der", FS_CRT_PATH],
-                            capture_output=True, text=True,
-                            cwd=request.config.option.build_dir)
-    subprocess_logger(result, 'mcumgr crt')
-    assert result.returncode == 0
-
-    result = subprocess.run(["mcumgr"] + mcumgr_conn_args +
-                            ["--tries=3", "--timeout=2",
-                             "fs", "upload",
-                             f"{project.info['id']}-{device_name}.key.der", FS_KEY_PATH],
-                            capture_output=True, text=True,
-                            cwd=request.config.option.build_dir)
-    subprocess_logger(result, 'mcumgr key')
-    assert result.returncode == 0
+    for component in ["crt", "key"]:
+        result = subprocess.run(["mcumgr"] + mcumgr_conn_args +
+                                ["--tries=3", "--timeout=2",
+                                 "fs", "upload",
+                                 f"{project.info['id']}-{device_name}.{component}.der", f"{FS_SUBDIR}/{component}.der"],
+                                capture_output=True, text=True,
+                                cwd=request.config.option.build_dir)
+        subprocess_logger(result, f'mcumgr {component}')
+        assert result.returncode == 0
 
     shell.exec_command('log go')
     shell._device.clear_buffer()

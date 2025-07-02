@@ -119,16 +119,16 @@ jobs:
           - hil_board: esp32_devkitc_wrover
             west_board: esp32_devkitc_wrover/esp32/procpu
             manifest: .ci-west-zephyr.yml
-            binary_name: zephyr.bin
+            binary_name: zephyr/zephyr.bin
             binary_blob: hal_espressif
-          - hil_board: mimxrt1024_evk
-            west_board: mimxrt1024_evk
+          - hil_board: frdm_rw612
+            west_board: frdm_rw612
             manifest: .ci-west-zephyr.yml
-            binary_name: zephyr.hex
+            binary_name: zephyr/zephyr.hex
           - hil_board: nrf52840dk
             west_board: nrf52840dk/nrf52840
             manifest: .ci-west-zephyr.yml
-            binary_name: zephyr.hex
+            binary_name: zephyr/zephyr.hex
           - hil_board: nrf9160dk
             west_board: nrf9160dk/nrf9160/ns
             manifest: .ci-west-ncs.yml
@@ -136,7 +136,7 @@ jobs:
           - hil_board: rak5010
             west_board: rak5010/nrf52840
             manifest: .ci-west-zephyr.yml
-            binary_name: zephyr.hex
+            binary_name: zephyr/zephyr.hex
     uses: ./.github/workflows/hil-integration-zephyr.yml
     with:
       hil_board: ${{ matrix.hil_board }}
@@ -216,12 +216,11 @@ jobs:
             binary_blob: hal_espressif
             run_tests: true
 
-          - hil_board: mimxrt1024_evk
-            west_board: mimxrt1024_evk
+          - hil_board: frdm_rw612
+            west_board: frdm_rw612
             manifest: .ci-west-zephyr.yml
             extra_twister_args: >-
               --west-flash="--dev-id=${!SNR_VAR}"
-              --west-runner jlink
             run_tests: true
 
           - hil_board: nrf52840dk
@@ -236,7 +235,13 @@ jobs:
             manifest: .ci-west-ncs.yml
             extra_twister_args: >-
               --west-flash="--dev-id=${!SNR_VAR}"
+              --west-runner nrfjprog
             run_tests: true
+
+          - hil_board: nucleo_h563zi
+            west_board: nucleo_h563zi/stm32h563xx
+            manifest: .ci-west-zephyr.yml
+            run_tests: false
 
           - hil_board: rak5010
             west_board: rak5010/nrf52840
@@ -246,11 +251,6 @@ jobs:
               --west-flash=--gdb=/usr/bin/gdb
               --west-runner blackmagicprobe
             run_tests: true
-
-          - hil_board: qemu_x86
-            west_board: qemu_x86
-            manifest: .ci-west-zephyr.yml
-            run_tests: false
     uses: ./.github/workflows/hil-sample-zephyr.yml
     with:
       hil_board: ${{ matrix.hil_board }}

@@ -19,51 +19,12 @@ generated from 20 up to 30.
 
 ## Building and Running
 
-### Authentication specific configuration
+### Runtime Configuration
 
-#### PSK based auth - Hardcoded
-
-Configure the following Kconfig options based on your Golioth
-credentials:
-
-* GOLIOTH_SAMPLE_PSK_ID - PSK ID of registered device
-* GOLIOTH_SAMPLE_PSK - PSK of registered device
-
-by adding these lines to configuration file (e.g. `prj.conf`):
-
-```cfg
-CONFIG_GOLIOTH_SAMPLE_PSK_ID="my-psk-id"
-CONFIG_GOLIOTH_SAMPLE_PSK="my-psk"
-```
-
-#### PSK based auth - Runtime
+#### PSK based auth
 
 We provide an option for setting Golioth credentials through the Zephyr
 shell. This is based on the Zephyr Settings subsystem.
-
-Enable the settings shell by including the following configuration overlay
-file:
-
-```sh
-$ west build -- -DEXTRA_CONF_FILE=../common/runtime_settings.conf
-```
-
-Alternatively, you can add the following options to ``prj.conf``:
-
-```cfg
-CONFIG_GOLIOTH_SAMPLE_HARDCODED_CREDENTIALS=n
-
-CONFIG_FLASH=y
-CONFIG_FLASH_MAP=y
-CONFIG_NVS=y
-
-CONFIG_SETTINGS=y
-CONFIG_SETTINGS_RUNTIME=y
-CONFIG_GOLIOTH_SAMPLE_SETTINGS=y
-CONFIG_GOLIOTH_SAMPLE_WIFI_SETTINGS=y
-CONFIG_GOLIOTH_SAMPLE_SETTINGS_AUTOLOAD=y
-CONFIG_GOLIOTH_SAMPLE_SETTINGS_SHELL=y
-```
 
 At runtime, configure PSK-ID and PSK using the device shell based on your
 Golioth credentials:
@@ -74,58 +35,20 @@ uart:~$ settings set golioth/psk <my-psk>
 uart:-$ kernel reboot cold
 ```
 
-#### Certificate based auth
+#### WiFi Configuration
 
-Configure the following Kconfig options based on your Golioth
-credentials:
+Devices that use WiFi get their WiFi credentials from the settings subsystem.
+You can set the credentials with the following shell commands:
 
-* CONFIG_GOLIOTH_AUTH_METHOD_CERT - use certificate-based
-    authentication
-* CONFIG_GOLIOTH_SAMPLE_HARDCODED_CRT_PATH - device certificate
-* CONFIG_GOLIOTH_SAMPLE_HARDCODED_KEY_PATH - device private key
-
-by adding these lines to configuration file (e.g. `prj.conf`):
-
-```cfg
-CONFIG_GOLIOTH_AUTH_METHOD_CERT=y
-CONFIG_GOLIOTH_SAMPLE_HARDCODED_CRT_PATH="keys/device.crt.der"
-CONFIG_GOLIOTH_SAMPLE_HARDCODED_KEY_PATH="keys/device.key.der"
+```sh
+uart:~$ settings set wifi/ssid <ssid>
+uart:~$ settings set wifi/psk <wifi-password>
+uart:-$ kernel reboot cold
 ```
 
 ### Platform specific configuration
 
-#### QEMU
-
-This application has been built and tested with QEMU x86 (qemu_x86).
-
-On your Linux host computer, open a terminal window, locate the source
-code of this sample application (i.e., `examples/zephyr/stream`)
-and type:
-
-```console
-$ west build -b qemu_x86 examples/zephyr/stream
-$ west build -t run
-```
-
-See [Networking with
-QEMU](https://docs.zephyrproject.org/3.3.0/connectivity/networking/qemu_setup.html)
-on how to setup networking on host and configure NAT/masquerading to
-access Internet.
-
 #### ESP32-DevKitC-WROVER
-
-Configure the following Kconfig options based on your WiFi AP
-credentials:
-
-- GOLIOTH_SAMPLE_WIFI_SSID  - WiFi SSID
-- GOLIOTH_SAMPLE_WIFI_PSK   - WiFi PSK
-
-by adding these lines to configuration file (e.g. `prj.conf`):
-
-```cfg
-CONFIG_GOLIOTH_SAMPLE_WIFI_SSID="my-wifi"
-CONFIG_GOLIOTH_SAMPLE_WIFI_PSK="my-psk"
-```
 
 On your host computer open a terminal window, locate the source code of
 this sample application (i.e., `examples/zephyr/stream`) and
@@ -138,52 +61,15 @@ $ west flash
 
 #### nRF52840 DK + ESP32
 
-This subsection documents using nRF52840 DK running Zephyr with
-offloaded ESP-AT WiFi driver and an ESP32-WROOM-32, ESP32-WROVER-32, or
-ESP32-C3-MINI-1 module based board running a WiFi stack. See [ESP32 AT
-Binary
-Lists](https://docs.espressif.com/projects/esp-at/en/latest/AT_Binary_Lists/index.html)
-or [ESP32-C3 AT Binary
-Lists](https://docs.espressif.com/projects/esp-at/en/latest/esp32c3/AT_Binary_Lists/ESP32-C3_AT_binaries.html)
-for links to ESP-AT binaries and details on how to flash ESP-AT image on
-ESP chip. Flash ESP chip with following command:
-
-```console
-esptool.py write_flash --verify 0x0 PATH_TO_ESP_AT/factory/factory_{MODULE}.bin
-```
-
-Connect nRF52840 DK and ESP32-DevKitC V4 (or other ESP32-WROOM-32 based
-board) using wires:
-
-| nRF52840 DK | ESP32-WROOM-32  | ESP32-WROVER-32 | ESP32-C3-MINI-1 |
-| ----------- | --------------- | ----------------| ----------------|
-| P1.01 (RX)  | IO17 (TX)       | IO22 (TX)       | IO7 (TX)        |
-| P1.02 (TX)  | IO16 (RX)       | IO19 (RX)       | IO6 (RX)        |
-| P1.03 (CTS) | IO14 (RTS)      | IO14 (RTS)      | IO4 (RTS)       |
-| P1.04 (RTS) | IO15 (CTS)      | IO15 (CTS)      | IO5 (CTS)       |
-| P1.05       | EN              | EN              | EN              |
-| GND         | GND             | GND             | GND             |
-
-Configure the following Kconfig options based on your WiFi AP
-credentials:
-
-* GOLIOTH_SAMPLE_WIFI_SSID - WiFi SSID
-* GOLIOTH_SAMPLE_WIFI_PSK - WiFi PSK
-
-by adding these lines to configuration file (e.g. `prj.conf` or
-`board/nrf52840dk_nrf52840.conf`):
-
-```cfg
-CONFIG_GOLIOTH_SAMPLE_WIFI_SSID="my-wifi"
-CONFIG_GOLIOTH_SAMPLE_WIFI_PSK="my-psk"
-```
+See [Golioth ESP-AT WiFi
+Shield](../../../zephyr/boards/shields/golioth_esp_at/doc/index.md).
 
 On your host computer open a terminal window, locate the source code of
 this sample application (i.e., `examples/zephyr/stream`) and
 type:
 
 ```console
-$ west build -b nrf52840dk/nrf52840 examples/zephyr/stream
+$ west build -b nrf52840dk/nrf52840 --shield golioth_esp_at examples/zephyr/stream
 $ west flash
 ```
 

@@ -66,9 +66,9 @@ jobs:
     runs-on: ubuntu-24.04
     needs: matrix
     container:
-      image: golioth/golioth-zephyr-base:0.16.8-SDK-v0
+      image: golioth/golioth-zephyr-base:0.17.0-SDK-v0
     env:
-      ZEPHYR_SDK_INSTALL_DIR: /opt/toolchains/zephyr-sdk-0.16.8
+      ZEPHYR_SDK_INSTALL_DIR: /opt/toolchains/zephyr-sdk-0.17.0
     name: zephyr-${{ inputs.platform }}-${{ matrix.test }}-test-nsim
     strategy:
       fail-fast: false
@@ -94,7 +94,7 @@ jobs:
           git config --global user.email user@git-scm.com
           git config --global user.name "Git User"
 
-          pip install \
+          uv pip install \
             -r zephyr/scripts/requirements-base.txt \
             -r zephyr/scripts/requirements-build-test.txt \
             -r zephyr/scripts/requirements-run-test.txt \
@@ -130,7 +130,7 @@ jobs:
             --timeout=600                                                               \
             --junitxml=summary/hil-zephyr-${{ inputs.platform }}-${{ matrix.test }}.xml \
             --alluredir=allure-reports                                                  \
-            --platform=zephyr                                                           \
+            --allure-platform=zephyr                                                    \
             --allure-board=${{ inputs.platform }}
 
       - name: Capture coverage

@@ -66,9 +66,9 @@ on:
 jobs:
   build:
     name: zephyr-${{ inputs.hil_board }}-twister-build
-    container: golioth/golioth-zephyr-base:0.16.8-SDK-v0
+    container: golioth/golioth-zephyr-base:0.17.0-SDK-v0
     env:
-      ZEPHYR_SDK_INSTALL_DIR: /opt/toolchains/zephyr-sdk-0.16.8
+      ZEPHYR_SDK_INSTALL_DIR: /opt/toolchains/zephyr-sdk-0.17.0
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository and submodules
@@ -93,13 +93,13 @@ jobs:
             git config --global user.name "Git User"
           fi
 
-          pip3 install \
+          uv pip install \
             -r zephyr/scripts/requirements-base.txt \
             -r zephyr/scripts/requirements-build-test.txt \
             -r zephyr/scripts/requirements-run-test.txt
 
           # Needed for TF-M
-          pip3 install \
+          uv pip install \
             cryptography==41.0.7 \
             pyasn1 \
             pyyaml \
@@ -117,14 +117,40 @@ jobs:
         run: |
           export EXTRA_BUILD_ARGS=-x=CONFIG_GOLIOTH_COAP_HOST_URI=\"${{ inputs.coap_gateway_url }}\"
 
+          # Build
           zephyr/scripts/twister                                                \
                 -v                                                              \
                 --overflow-as-errors                                            \
                 --platform ${{ inputs.west_board }}                             \
                 -T modules/lib/golioth-firmware-sdk/examples/zephyr             \
-                --prep-artifacts-for-testing                                    \
-                --package-artifacts test_artifacts_${{ inputs.hil_board }}.tar  \
+                --build-only                                                    \
                 $EXTRA_BUILD_ARGS
+
+          # Save lfs.hex, which otherwise is cleaned up by twister with
+          # --prep-artifacts-for-testing
+          extra_files=$(find twister-out -name lfs.hex)
+
+          if [ "$extra_files" != "" ]; then
+              tar -cf extra_files.tar $extra_files
+          fi
+
+          # Reuse build directory and cleanup artifacts for testing
+          zephyr/scripts/twister                                                \
+                -n                                                              \
+                -v                                                              \
+                --overflow-as-errors                                            \
+                --platform ${{ inputs.west_board }}                             \
+                -T modules/lib/golioth-firmware-sdk/examples/zephyr             \
+                --prep-artifacts-for-testing                                    \
+                $EXTRA_BUILD_ARGS
+
+          # Re-add lfx.hex files
+          if [ "$extra_files" != "" ]; then
+              tar -xf extra_files.tar
+          fi
+
+          # Package for testing
+          tar -cjf test_artifacts_${{ inputs.hil_board }}.tar twister-out
 
       - name: Save artifacts
         if: success() || failure()
@@ -143,9 +169,9 @@ jobs:
     timeout-minutes: 30
 
     container:
-      image: golioth/golioth-twister-base:3407412
+      image: golioth/golioth-twister-base:2ddffa5
       env:
-        ZEPHYR_SDK_INSTALL_DIR: /opt/toolchains/zephyr-sdk-0.16.8
+        ZEPHYR_SDK_INSTALL_DIR: /opt/toolchains/zephyr-sdk-0.17.0
       volumes:
         - /dev:/dev
         - /home/golioth/credentials:/opt/credentials
@@ -174,7 +200,7 @@ jobs:
           git config --global user.email user@git-scm.com
           git config --global user.name "Git User"
 
-          pip3 install \
+          uv pip install \
             -r zephyr/scripts/requirements-base.txt \
             -r zephyr/scripts/requirements-build-test.txt \
             -r zephyr/scripts/requirements-run-test.txt \
@@ -188,7 +214,9 @@ jobs:
           name: test_artifacts_${{ inputs.hil_board }}
           path: .
       - name: Extract artifacts
-        run: tar -xvf test_artifacts_${{ inputs.hil_board }}.tar
+        run: |
+          rm -rf twister-out
+          tar -xvf test_artifacts_${{ inputs.hil_board }}.tar
       - name: Run test
         shell: bash
         env:
@@ -263,12 +291,12 @@ jobs:
           export PATH=$PATH:/opt/SEGGER/JLink
           SNR_VAR=CI_${hil_board^^}_SNR
           PORT_VAR=CI_${hil_board^^}_PORT
-          cat <<EOF > erase_mimxrt1024_evk.jlink
+          cat <<EOF > erase_frdm_rw612.jlink
           r
           h
           exec EnableEraseAllFlashBanks
-          erase
-          sleep 3
+          erase 0x8000000 0x8624000
+          sleep 30
           r
           sleep 3
           q
@@ -280,13 +308,13 @@ jobs:
           elif [[ "${hil_board}" == "esp32_devkitc_wrover" ]]; then
             esptool.py --port ${!PORT_VAR} erase_flash
 
-          elif [[ "${hil_board}" == "mimxrt1024_evk" ]]; then
+          elif [[ "${hil_board}" == "frdm_rw612" ]]; then
             JLinkExe \
               -nogui 1 \
               -if swd \
               -speed auto \
-              -device MIMXRT1024XXX5A \
-              -CommanderScript erase_mimxrt1024_evk.jlink \
+              -device RW612 \
+              -CommanderScript erase_frdm_rw612.jlink \
               -SelectEmuBySN ${!SNR_VAR}
 
           elif [[ "${hil_board}" == "rak5010" ]]; then

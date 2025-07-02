@@ -3,16 +3,16 @@ import allure
 import os
 from pytest_hil.espidfboard import ESPIDFBoard
 from pytest_hil.esp32_devkitc_wrover import ESP32DevKitCWROVER
+from pytest_hil.frdmrw612 import FRDMRW612
 from pytest_hil.nrf52840dk import nRF52840DK
 from pytest_hil.nrf9160dk  import nRF9160DK
-from pytest_hil.mimxrt1024evk import MIMXRT1024EVK
 from pytest_hil.rak5010 import RAK5010
 from pytest_hil.linuxboard import LinuxBoard
 from pytest_hil.native_sim import NativeSimBoard
 
 def pytest_addoption(parser):
-    parser.addoption("--platform", type=str,
-            help="Platform name (eg: esp-idf, linux, zephyr)")
+    parser.addoption("--allure-platform", type=str,
+            help="Allure platform name (eg: esp-idf, linux, zephyr)")
     parser.addoption("--runner-name", type=str,
             help="Self-hosted runner name (eg: sams_orange_pi, mikes_testbench)")
     parser.addoption("--board", type=str,
@@ -36,8 +36,8 @@ def pytest_addoption(parser):
 
 
 @pytest.fixture(scope="session")
-def platform_name(request):
-    return request.config.getoption("--platform")
+def allure_platform_name(request):
+    return request.config.getoption("--allure-platform")
 
 @pytest.fixture(scope="session")
 def runner_name(request):
@@ -83,7 +83,25 @@ def wifi_psk(request):
     return request.config.getoption("--wifi-psk")
 
 @pytest.fixture(scope="module")
-async def board(board_name, port, baud, wifi_ssid, wifi_psk, fw_image, serial_number, bmp_port):
+async def board(request, baud, wifi_ssid, wifi_psk):
+    if request.config.getoption('twister_harness', None):
+        dut = request.getfixturevalue("dut")
+        dut.disconnect()
+
+        board_name = dut.device_config.platform \
+            .split("/", maxsplit=1)[0] \
+            .split("@", maxsplit=1)[0]
+        port = dut.device_config.serial
+        fw_image = None
+        serial_number = None
+        bmp_port = None
+    else:
+        board_name = request.getfixturevalue("board_name")
+        port = request.getfixturevalue("port")
+        fw_image = request.getfixturevalue("fw_image")
+        serial_number = request.getfixturevalue("serial_number")
+        bmp_port = request.getfixturevalue("bmp_port")
+
     if (board_name.lower() == "esp32s3_devkitc_espidf" or
         board_name.lower() == "esp32c3_devkitm_espidf" or
         board_name.lower() == "esp32_devkitc_wrover_espidf"):
@@ -91,13 +109,12 @@ async def board(board_name, port, baud, wifi_ssid, wifi_psk, fw_image, serial_nu
     elif board_name.lower() == "esp32_devkitc_wrover":
         board = ESP32DevKitCWROVER(port, baud, wifi_ssid, wifi_psk, fw_image,
                                    serial_number=serial_number)
+    elif board_name.lower() == "frdm_rw612":
+        board = FRDMRW612(port, baud, wifi_ssid, wifi_psk, fw_image, serial_number=serial_number)
     elif board_name.lower() == "nrf52840dk":
         board = nRF52840DK(port, baud, wifi_ssid, wifi_psk, fw_image, serial_number=serial_number)
     elif board_name.lower() == "nrf9160dk":
         board = nRF9160DK(port, baud, wifi_ssid, wifi_psk, fw_image, serial_number=serial_number)
-    elif board_name.lower() == "mimxrt1024_evk":
-        board = MIMXRT1024EVK(port, baud, wifi_ssid, wifi_psk, fw_image,
-                              serial_number=serial_number)
     elif board_name.lower() == "native_sim":
         board = NativeSimBoard(fw_image)
     elif board_name.lower() == "rak5010":
@@ -113,14 +130,14 @@ async def board(board_name, port, baud, wifi_ssid, wifi_psk, fw_image, serial_nu
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_setup(item):
     board_name = item.config.getoption("--allure-board") or item.config.getoption("--board")
-    platform_name = item.config.getoption("--platform")
+    allure_platform_name = item.config.getoption("--allure-platform")
     suitename = item.config.getoption("--custom-suitename") or "hil"
 
     allure.dynamic.tag(board_name)
-    allure.dynamic.tag(platform_name)
+    allure.dynamic.tag(allure_platform_name)
     allure.dynamic.parameter("board_name", board_name)
-    allure.dynamic.parameter("platform_name", platform_name)
-    allure.dynamic.parent_suite(f"{suitename}.{platform_name}.{board_name}")
+    allure.dynamic.parameter("platform_name", allure_platform_name)
+    allure.dynamic.parent_suite(f"{suitename}.{allure_platform_name}.{board_name}")
 
     if runner_name is not None:
         allure.dynamic.tag(item.config.getoption("--runner-name"))
